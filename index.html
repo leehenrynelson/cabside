@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#14181d">
+<title>Cabside HGV Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+/* Layout: full-screen map, status strip on top, one bottom sheet for settings/route. Road-sign vocabulary for markers. */
+:root{
+  --bg:#f3f4f2; --panel:#ffffff; --fg:#1b1f24; --muted:#5d6670;
+  --line:#d6d9dc; --accent:#f2b705; /* HGV amber */
+  --stop:#c8102e; --go:#1f7a3a; --info:#0057b8;
+  --display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
+  --body:"Atkinson Hyperlegible",system-ui,-apple-system,Segoe UI,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#14181d; --panel:#1d2329; --fg:#eef1f3; --muted:#9aa4ae; --line:#323a42;
+  --accent:#f2b705; --stop:#ff5a6e; --go:#4cc47a; --info:#5aa2ff; color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.4 var(--body)}
+#map{position:fixed;inset:0;z-index:0;background:var(--bg)}
+.top{position:fixed;top:0;left:0;right:0;z-index:500;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  padding:calc(env(safe-area-inset-top,0px) + 10px) max(12px,env(safe-area-inset-right,0px)) 10px max(12px,env(safe-area-inset-left,0px));
+  background:linear-gradient(var(--panel),color-mix(in srgb,var(--panel) 85%,transparent));border-bottom:1px solid var(--line)}
+.brand{font:700 22px/1 var(--display);letter-spacing:.04em;text-transform:uppercase}
+.brand b{background:var(--accent);color:#14181d;padding:1px 6px;border-radius:3px;margin-right:4px}
+.pill{font:700 13px/1 var(--display);letter-spacing:.05em;text-transform:uppercase;padding:7px 10px;border-radius:999px;border:2px solid currentColor;white-space:nowrap}
+.pill.on{color:var(--stop)} .pill.off{color:var(--go)}
+.spacer{flex:1}
+button{font:700 15px/1 var(--display);letter-spacing:.05em;text-transform:uppercase;border:0;border-radius:8px;padding:11px 14px;cursor:pointer;background:var(--accent);color:#14181d}
+button.ghost{background:var(--panel);color:var(--fg);border:1px solid var(--line)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--info);outline-offset:2px}
+.fab{position:fixed;z-index:500;right:max(12px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:8px;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 96px)}
+.fab button{width:48px;height:48px;padding:0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:600;background:var(--panel);border-top:3px solid var(--accent);
+  border-radius:14px 14px 0 0;box-shadow:0 -6px 24px rgba(0,0,0,.25);max-height:78vh;overflow:auto;
+  padding:12px max(16px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 14px) max(16px,env(safe-area-inset-left,0px))}
+.tabs{display:flex;gap:6px;margin-bottom:10px}
+.tabs button{flex:1;background:transparent;color:var(--muted);border:1px solid var(--line)}
+.tabs button[aria-selected=true]{background:var(--accent);color:#14181d;border-color:var(--accent)}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+input,select{font:16px var(--body);padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);min-width:0}
+.hint{font-size:13px;color:var(--muted);margin:8px 0 0}
+.status{font-size:13px;color:var(--muted);margin-top:8px;min-height:1.2em}
+.summary{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-variant-numeric:tabular-nums}
+.summary div{display:flex;flex-direction:column}
+.summary strong{font:700 26px/1 var(--display)}
+.summary span{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:6px;font-size:14px}
+.legend label{flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--fg)}
+.collapsed .body{display:none}
+.grab{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.grab h2{font:700 18px/1 var(--display);text-transform:uppercase;letter-spacing:.05em;margin:0}
+/* road-sign markers */
+.sign{width:34px;height:34px;border-radius:50%;background:#fff;border:4px solid #c8102e;display:grid;place-items:center;
+  font:700 11px/1 "Barlow Condensed",Arial,sans-serif;color:#111;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.sign.ok{border-color:#9aa4ae;opacity:.75}
+.sq{width:28px;height:28px;border-radius:5px;display:grid;place-items:center;font:700 15px/1 "Barlow Condensed",Arial,sans-serif;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.sq.park{background:#0057b8} .sq.load{background:#6b3fa0} .sq.mine{background:#f2b705;color:#111}
+.leaflet-popup-content{font:14px/1.4 var(--body)}
+.leaflet-popup-content h3{font:700 16px/1.1 var(--display);text-transform:uppercase;margin:0 0 4px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div id="map" role="application" aria-label="Map"></div>
+
+<header class="top">
+  <div class="brand"><b>HGV</b>Cabside</div>
+  <span id="llcs" class="pill" title="London Lorry Control Scheme">LLCS…</span>
+  <span class="spacer"></span>
+  <span id="loadMsg" class="hint" style="margin:0"></span>
+</header>
+
+<div class="fab">
+  <button id="locate" class="ghost" aria-label="Show my location">◎</button>
+  <button id="refresh" class="ghost" aria-label="Reload restrictions here">↻</button>
+</div>
+
+<section id="sheet" class="sheet collapsed">
+  <div class="grab">
+    <h2 id="sheetTitle">Your vehicle &amp; route</h2>
+    <button id="toggle" class="ghost" aria-expanded="false">Open</button>
+  </div>
+  <div class="body">
+    <div class="tabs" role="tablist">
+      <button role="tab" aria-selected="true" data-tab="vehicle">Vehicle</button>
+      <button role="tab" aria-selected="false" data-tab="route">Route</button>
+      <button role="tab" aria-selected="false" data-tab="layers">Layers</button>
+    </div>
+
+    <div data-panel="vehicle">
+      <div class="row">
+        <label>Height (ft)<input id="hFt" type="number" inputmode="numeric" min="6" max="16" value="13"></label>
+        <label>Height (in)<input id="hIn" type="number" inputmode="numeric" min="0" max="11" value="6"></label>
+        <label>Width (m)<input id="wid" type="number" step="0.01" value="2.55"></label>
+        <label>Length (m)<input id="len" type="number" step="0.1" value="16.5"></label>
+        <label>Gross weight (t)<input id="wt" type="number" step="0.5" value="44"></label>
+        <label>Axle load (t)<input id="axle" type="number" step="0.5" value="11.5"></label>
+      </div>
+      <p class="hint">Restrictions below your dimensions show as red signs. Ones you clear are greyed out.</p>
+    </div>
+
+    <div data-panel="route" hidden>
+      <div class="row">
+        <label>From<input id="from" placeholder="Postcode, or blank = my location" autocomplete="postal-code"></label>
+        <label>To<input id="to" placeholder="Destination postcode" autocomplete="postal-code"></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label>Routing key (free)<input id="orsKey" type="password" placeholder="openrouteservice key"></label>
+      </div>
+      <p class="hint">Truck routing uses your size and weight. Get a free key at openrouteservice.org (sign up → Dashboard → API key). It stays on this phone.</p>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button id="go">Plan HGV route</button>
+        <button id="clearRoute" class="ghost">Clear</button>
+      </div>
+      <div id="routeStatus" class="status"></div>
+      <div id="summary" class="summary" hidden>
+        <div><strong id="sDist">–</strong><span>Miles</span></div>
+        <div><strong id="sTime">–</strong><span>Drive time</span></div>
+        <div><strong id="sEta">–</strong><span>ETA</span></div>
+      </div>
+    </div>
+
+    <div data-panel="layers" hidden>
+      <div class="legend">
+        <label><input type="checkbox" id="lyHeight" checked> Height limits</label>
+        <label><input type="checkbox" id="lyWeight" checked> Weight limits</label>
+        <label><input type="checkbox" id="lyWidth" checked> Width limits</label>
+        <label><input type="checkbox" id="lyNoHgv" checked> No-HGV roads</label>
+        <label><input type="checkbox" id="lyPark" checked> HGV parking</label>
+        <label><input type="checkbox" id="lyLoad" checked> Loading bays</label>
+        <label><input type="checkbox" id="lyMine" checked> My notes</label>
+      </div>
+      <p class="hint">Press and hold the map to drop your own note, e.g. "gate round the back" or "bay always full". Notes stay on this phone.</p>
+      <p class="hint">Map data © OpenStreetMap contributors. Always obey road signs. This map is a guide, not a guarantee.</p>
+    </div>
+  </div>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+if (!window.L){
+  document.getElementById("map").innerHTML = '<p style="padding:120px 20px;font:16px system-ui;text-align:center">The map library didn\'t load. Open this page from its GitHub Pages link in Safari or Chrome, with mobile data or Wi-Fi on.</p>';
+  throw new Error("Leaflet missing");
+}
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem("cabside:"+k); return v==null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem("cabside:"+k, JSON.stringify(v)); }catch(e){} }
+};
+
+/* ---------- Vehicle ---------- */
+const vehFields = ["hFt","hIn","wid","len","wt","axle"];
+const savedVeh = store.get("veh", null);
+if (savedVeh) vehFields.forEach(f => { if (savedVeh[f] != null) $(f).value = savedVeh[f]; });
+function vehicle(){
+  const v = {}; vehFields.forEach(f => v[f] = parseFloat($(f).value) || 0);
+  return { heightM: (v.hFt*12 + v.hIn) * 0.0254, widthM: v.wid, lengthM: v.len, weightT: v.wt, axleT: v.axle };
+}
+vehFields.forEach(f => $(f).addEventListener("change", () => {
+  const o = {}; vehFields.forEach(g => o[g] = $(g).value); store.set("veh", o); renderRestrictions();
+}));
+$("orsKey").value = store.get("orsKey", "");
+$("orsKey").addEventListener("change", () => store.set("orsKey", $("orsKey").value.trim()));
+
+/* ---------- London Lorry Control Scheme ----------
+   Over 18t GVW: Mon–Fri 21:00–07:00, Sat 13:00 to Mon 07:00 (London Councils). */
+function llcsActive(d){
+  const day = d.getDay(), m = d.getHours()*60 + d.getMinutes();
+  if (day === 0) return true;                 // Sunday
+  if (day === 6) return m >= 13*60 || m < 7*60; // Saturday: Fri-night tail + from 1pm
+  if (day === 1) return m < 7*60 || m >= 21*60; // Monday morning tail
+  return m < 7*60 || m >= 21*60;              // Tue–Fri
+}
+function nextChange(d){
+  const t = new Date(d); t.setSeconds(0,0); const now = llcsActive(t);
+  for (let i=0;i<60*24*3;i++){ t.setMinutes(t.getMinutes()+1); if (llcsActive(t)!==now) return t; }
+  return null;
+}
+function renderLlcs(){
+  const el = $("llcs"), now = new Date(), on = llcsActive(now), nc = nextChange(now);
+  const heavy = vehicle().weightT > 18;
+  const when = nc ? nc.toLocaleString("en-GB",{weekday:"short",hour:"2-digit",minute:"2-digit"}) : "";
+  if (!heavy){ el.className = "pill off"; el.textContent = "LLCS n/a under 18t"; return; }
+  el.className = "pill " + (on ? "on" : "off");
+  el.textContent = on ? "LLCS ON · ends " + when : "LLCS off · starts " + when;
+  el.title = "London Lorry Control Scheme for vehicles over 18t. Bank holidays: check London Councils.";
+}
+renderLlcs(); setInterval(renderLlcs, 30000);
+
+/* ---------- Map ---------- */
+const start = store.get("view", { lat: 51.5072, lng: -0.1276, z: 14 });
+const map = L.map("map", { zoomControl: false }).setView([start.lat, start.lng], start.z);
+/* CARTO tiles work from any page or file; OSM's own tile server blocks requests without a website address. */
+const TILE_SOURCES = [
+  ["https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { maxZoom:20, subdomains:"abcd", attribution:"© OpenStreetMap contributors © CARTO" }],
+  ["https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19, attribution:"© OpenStreetMap contributors" }],
+  ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", { maxZoom:19, attribution:"Tiles © Esri · © OpenStreetMap contributors" }]
+];
+let tileIdx = 0, tiles = null;
+function useTiles(i){
+  if (tiles) map.removeLayer(tiles);
+  tileIdx = i; let errors = 0, loaded = 0;
+  tiles = L.tileLayer(TILE_SOURCES[i][0], TILE_SOURCES[i][1]).addTo(map);
+  tiles.on("tileload", () => { loaded++; });
+  tiles.on("tileerror", () => {
+    errors++;
+    if (errors >= 4 && loaded === 0){
+      if (tileIdx + 1 < TILE_SOURCES.length) useTiles(tileIdx + 1);
+      else $("loadMsg").textContent = "Map can't load. Open the GitHub Pages link in Safari or Chrome, with data on.";
+    }
+  });
+}
+useTiles(0);
+map.on("moveend", () => { const c = map.getCenter(); store.set("view", { lat: c.lat, lng: c.lng, z: map.getZoom() }); });
+
+const layers = {
+  height: L.layerGroup().addTo(map), weight: L.layerGroup().addTo(map), width: L.layerGroup().addTo(map),
+  nohgv: L.layerGroup().addTo(map), park: L.layerGroup().addTo(map), load: L.layerGroup().addTo(map),
+  mine: L.layerGroup().addTo(map), route: L.layerGroup().addTo(map), me: L.layerGroup().addTo(map)
+};
+const layerToggles = { lyHeight:"height", lyWeight:"weight", lyWidth:"width", lyNoHgv:"nohgv", lyPark:"park", lyLoad:"load", lyMine:"mine" };
+Object.entries(layerToggles).forEach(([id, k]) => $(id).addEventListener("change", e => e.target.checked ? layers[k].addTo(map) : map.removeLayer(layers[k])));
+
+/* ---------- Parsing OSM limits ---------- */
+function parseMetres(raw){
+  if (!raw) return null; const s = String(raw).trim().toLowerCase();
+  if (/^(none|default|unsigned|below_default)$/.test(s)) return null;
+  let m = s.match(/^(\d+)\s*'\s*(\d+(?:\.\d+)?)?\s*"?$/);          // 14'6"
+  if (m) return ((+m[1])*12 + (+(m[2]||0))) * 0.0254;
+  m = s.match(/^(\d+(?:\.\d+)?)\s*(ft|feet)$/); if (m) return +m[1]*0.3048;
+  m = s.match(/^(\d+(?:\.\d+)?)\s*m?$/); if (m) return +m[1];
+  return null;
+}
+function parseTonnes(raw){
+  if (!raw) return null; const s = String(raw).trim().toLowerCase();
+  let m = s.match(/^(\d+(?:\.\d+)?)\s*(t|tonnes?)?$/); if (m) return +m[1];
+  m = s.match(/^(\d+(?:\.\d+)?)\s*(st|tons?)$/); if (m) return +m[1]*0.907;
+  return null;
+}
+const ftIn = metres => { const inch = Math.round(metres/0.0254); return Math.floor(inch/12) + "'" + (inch%12) + '"'; };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+/* ---------- Overpass loader ---------- */
+let features = [];
+const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+async function loadArea(){
+  if (map.getZoom() < 13){ $("loadMsg").textContent = "Zoom in to load restrictions"; return; }
+  const b = map.getBounds(), bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(n => n.toFixed(5)).join(",");
+  const q = `[out:json][timeout:25];(
+    nwr["maxheight"](${bbox}); nwr["maxheight:physical"](${bbox});
+    way["maxweight"](${bbox}); way["maxweight:hgv"](${bbox}); node["maxweight"](${bbox});
+    way["maxwidth"](${bbox}); node["maxwidth"](${bbox});
+    way["highway"]["hgv"="no"](${bbox});
+    nwr["amenity"="parking"]["hgv"~"yes|designated"](${bbox});
+    nwr["highway"="services"]["hgv"~"yes|designated"](${bbox});
+    nwr["amenity"="loading_dock"](${bbox});
+    nwr["parking_space"~"loading|delivery"](${bbox});
+    nwr["parking"]["access"="delivery"](${bbox});
+  );out tags center geom qt 2500;`;
+  $("loadMsg").textContent = "Loading restrictions…";
+  for (const url of OVERPASS){
+    try{
+      const r = await fetch(url, { method:"POST", body: "data=" + encodeURIComponent(q) });
+      if (!r.ok) throw new Error(r.status);
+      const j = await r.json(); features = j.elements || []; renderRestrictions();
+      $("loadMsg").textContent = features.length + " items loaded"; return;
+    }catch(e){ /* try next mirror */ }
+  }
+  $("loadMsg").textContent = "Couldn't load restrictions. Tap ↻ to retry.";
+}
+let loadTimer; map.on("moveend", () => { clearTimeout(loadTimer); loadTimer = setTimeout(loadArea, 600); });
+$("refresh").addEventListener("click", loadArea);
+
+function pos(el){ return el.center ? [el.center.lat, el.center.lon] : (el.lat != null ? [el.lat, el.lon] : null); }
+function signIcon(text, bad){ return L.divIcon({ className:"", html:`<div class="sign ${bad?"":"ok"}">${esc(text)}</div>`, iconSize:[34,34], iconAnchor:[17,17] }); }
+function sqIcon(cls, text){ return L.divIcon({ className:"", html:`<div class="sq ${cls}">${text}</div>`, iconSize:[28,28], iconAnchor:[14,14] }); }
+function popup(title, t){
+  const name = t.name || t["addr:street"] || ""; const extra = [];
+  if (t.fee) extra.push("Fee: " + esc(t.fee)); if (t.capacity) extra.push("Spaces: " + esc(t.capacity));
+  if (t.opening_hours) extra.push("Hours: " + esc(t.opening_hours)); if (t.maxstay) extra.push("Max stay: " + esc(t.maxstay));
+  if (t.note) extra.push(esc(t.note));
+  return `<h3>${esc(title)}</h3>${name ? esc(name)+"<br>" : ""}${extra.join("<br>")}`;
+}
+
+function renderRestrictions(){
+  ["height","weight","width","nohgv","park","load"].forEach(k => layers[k].clearLayers());
+  const v = vehicle();
+  for (const el of features){
+    const t = el.tags || {}, p = pos(el); if (!p) continue;
+    const h = parseMetres(t["maxheight:physical"] || t.maxheight);
+    if (h){
+      const bad = h < v.heightM + 0.05;
+      L.marker(p, { icon: signIcon(ftIn(h), bad), zIndexOffset: bad ? 1000 : 0 }).addTo(layers.height)
+        .bindPopup(popup("Height limit " + ftIn(h) + " (" + h.toFixed(1) + " m)", t) + (bad ? "<br><b>Too low for your vehicle</b>" : "<br>You clear this"));
+      continue;
+    }
+    const w = parseTonnes(t["maxweight:hgv"] || t.maxweight);
+    if (w){
+      const bad = w < v.weightT;
+      const exc = t["maxweight:conditional"] || t["maxweight:hgv:conditional"] || "";
+      L.marker(p, { icon: signIcon(w + "T", bad) }).addTo(layers.weight)
+        .bindPopup(popup("Weight limit " + w + " t", t) + (exc ? "<br>Except: " + esc(exc) : "") + (bad ? "<br><b>Over the limit at your weight</b>" + (/delivery|access/i.test(exc) ? " (unless loading/access)" : "") : ""));
+      continue;
+    }
+    const wd = parseMetres(t.maxwidth);
+    if (wd){
+      const bad = wd < v.widthM + 0.05;
+      L.marker(p, { icon: signIcon(wd.toFixed(1) + "m", bad) }).addTo(layers.width)
+        .bindPopup(popup("Width limit " + wd.toFixed(2) + " m", t) + (bad ? "<br><b>Too narrow</b>" : ""));
+      continue;
+    }
+    if (t.hgv === "no" && el.geometry){
+      L.polyline(el.geometry.map(g => [g.lat, g.lon]), { color:"#c8102e", weight:5, opacity:.7, dashArray:"6 6" })
+        .addTo(layers.nohgv).bindPopup(popup("No HGVs", t));
+      continue;
+    }
+    if (t.amenity === "parking" || t.highway === "services"){
+      L.marker(p, { icon: sqIcon("park","P") }).addTo(layers.park).bindPopup(popup(t.highway === "services" ? "Services · HGV parking" : "HGV parking", t));
+      continue;
+    }
+    L.marker(p, { icon: sqIcon("load","L") }).addTo(layers.load).bindPopup(popup(t.amenity === "loading_dock" ? "Loading dock" : "Loading bay", t));
+  }
+}
+
+/* ---------- My notes (long press) ---------- */
+let notes = store.get("notes", []);
+function renderNotes(){
+  layers.mine.clearLayers();
+  notes.forEach((n, i) => {
+    const m = L.marker([n.lat, n.lng], { icon: sqIcon("mine","!") }).addTo(layers.mine);
+    const div = document.createElement("div");
+    div.innerHTML = `<h3>My note</h3><p style="margin:0 0 8px">${esc(n.text)}</p>`;
+    const del = document.createElement("button"); del.className = "ghost"; del.textContent = "Delete";
+    del.onclick = () => { notes.splice(i,1); store.set("notes", notes); renderNotes(); };
+    div.appendChild(del); m.bindPopup(div);
+  });
+}
+map.on("contextmenu", e => {
+  const div = document.createElement("div");
+  div.innerHTML = `<h3>Add note</h3>`;
+  const inp = document.createElement("input"); inp.id = "noteText"; inp.placeholder = "e.g. gate round the back"; inp.style.width = "100%";
+  const save = document.createElement("button"); save.textContent = "Save"; save.style.marginTop = "8px";
+  save.onclick = () => { const txt = inp.value.trim(); if (!txt) return; notes.push({ lat:e.latlng.lat, lng:e.latlng.lng, text:txt }); store.set("notes", notes); map.closePopup(); renderNotes(); };
+  div.append(inp, save);
+  L.popup().setLatLng(e.latlng).setContent(div).openOn(map); setTimeout(() => inp.focus(), 50);
+});
+renderNotes();
+
+/* ---------- Location ---------- */
+let myPos = null;
+function locate(fly){
+  if (!navigator.geolocation){ $("loadMsg").textContent = "Location not available on this device"; return; }
+  navigator.geolocation.getCurrentPosition(p => {
+    myPos = [p.coords.latitude, p.coords.longitude];
+    layers.me.clearLayers();
+    L.circleMarker(myPos, { radius:9, color:"#fff", weight:3, fillColor:"#0057b8", fillOpacity:1 }).addTo(layers.me);
+    if (fly) map.setView(myPos, Math.max(map.getZoom(), 15));
+  }, () => { $("loadMsg").textContent = "Allow location to centre the map on you"; }, { enableHighAccuracy:true, timeout:10000 });
+}
+$("locate").addEventListener("click", () => locate(true));
+
+/* ---------- Routing (openrouteservice driving-hgv) ---------- */
+async function postcode(pc){
+  const r = await fetch("https://api.postcodes.io/postcodes/" + encodeURIComponent(pc.replace(/\s+/g,"")));
+  if (!r.ok) throw new Error("Postcode not found: " + pc);
+  const j = await r.json(); return [j.result.latitude, j.result.longitude];
+}
+async function planRoute(){
+  const st = $("routeStatus"); $("summary").hidden = true; layers.route.clearLayers();
+  const key = $("orsKey").value.trim(); store.set("orsKey", key);
+  if (!key){ st.textContent = "Add your free openrouteservice key first."; return; }
+  if (!$("to").value.trim()){ st.textContent = "Enter a destination postcode."; return; }
+  try{
+    st.textContent = "Finding postcodes…";
+    let from;
+    if ($("from").value.trim()) from = await postcode($("from").value);
+    else if (myPos) from = myPos;
+    else { st.textContent = "Tap ◎ to share your location, or enter a From postcode."; return; }
+    const to = await postcode($("to").value);
+    const v = vehicle();
+    st.textContent = "Planning a truck route…";
+    const body = {
+      coordinates: [[from[1], from[0]], [to[1], to[0]]],
+      units: "mi", instructions: false,
+      options: { vehicle_type: "hgv", profile_params: { restrictions: {
+        height: +v.heightM.toFixed(2), width: v.widthM, length: v.lengthM, weight: v.weightT, axleload: v.axleT
+      } } }
+    };
+    const r = await fetch("https://api.openrouteservice.org/v2/directions/driving-hgv/geojson", {
+      method:"POST", headers:{ "Content-Type":"application/json", "Authorization": key }, body: JSON.stringify(body)
+    });
+    if (r.status === 401 || r.status === 403) throw new Error("The routing key was refused. Check it on openrouteservice.org.");
+    if (!r.ok) throw new Error("No truck route found for these dimensions (" + r.status + ").");
+    const j = await r.json(), f = j.features[0], s = f.properties.summary;
+    const line = L.geoJSON(f, { style:{ color:"#f2b705", weight:7, opacity:.95 } }).addTo(layers.route);
+    L.circleMarker(to, { radius:8, color:"#111", weight:3, fillColor:"#f2b705", fillOpacity:1 }).addTo(layers.route);
+    map.fitBounds(line.getBounds(), { padding:[40,40] });
+    const mins = Math.round(s.duration/60), eta = new Date(Date.now() + s.duration*1000);
+    $("sDist").textContent = s.distance.toFixed(1);
+    $("sTime").textContent = Math.floor(mins/60) + "h " + String(mins%60).padStart(2,"0");
+    $("sEta").textContent = eta.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+    $("summary").hidden = false;
+    const warn = (v.weightT > 18 && (llcsActive(new Date()) || llcsActive(eta))) ? " London Lorry Control is in force on this trip if you're inside Greater London. Check your route is approved." : "";
+    st.textContent = "Truck route for your size and weight. Time uses HGV speeds, not live traffic." + warn;
+  }catch(e){ st.textContent = e.message || "Something went wrong planning the route."; }
+}
+$("go").addEventListener("click", planRoute);
+$("clearRoute").addEventListener("click", () => { layers.route.clearLayers(); $("summary").hidden = true; $("routeStatus").textContent = ""; });
+
+/* ---------- Sheet & tabs ---------- */
+$("toggle").addEventListener("click", () => {
+  const c = $("sheet").classList.toggle("collapsed");
+  $("toggle").textContent = c ? "Open" : "Close"; $("toggle").setAttribute("aria-expanded", String(!c));
+});
+document.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("[data-tab]").forEach(x => x.setAttribute("aria-selected", String(x === b)));
+  document.querySelectorAll("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== b.dataset.tab);
+}));
+
+setTimeout(() => map.invalidateSize(), 300);
+window.addEventListener("resize", () => map.invalidateSize());
+locate(false); loadArea();
+</script>
+</body>
+</html>
