@@ -201,11 +201,10 @@ renderLlcs(); setInterval(renderLlcs, 30000);
 /* ---------- Map ---------- */
 const start = store.get("view", { lat: 51.5072, lng: -0.1276, z: 14 });
 const map = L.map("map", { zoomControl: false }).setView([start.lat, start.lng], start.z);
-/* CARTO tiles work from any page or file; OSM's own tile server blocks requests without a website address. */
+/* OpenStreetMap tiles; free, no key. */
 const TILE_SOURCES = [
   ["https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19, attribution:"© OpenStreetMap contributors" }],
-  ["https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", { maxZoom:19, subdomains:"abc", attribution:"© OpenStreetMap contributors, HOT" }],
-  ["https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { maxZoom:20, subdomains:"abcd", attribution:"© OpenStreetMap contributors © CARTO" }]
+  ["https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", { maxZoom:19, subdomains:"abc", attribution:"© OpenStreetMap contributors, HOT" }]
 ];
 let tileIdx = 0, tiles = null;
 function useTiles(i){
