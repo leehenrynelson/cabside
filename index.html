@@ -6,81 +6,112 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#14181d">
 <title>Cabside HGV Map</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
 <style>
-/* Layout: full-screen map, status strip on top, one bottom sheet for settings/route. Road-sign vocabulary for markers. */
+/* Layout: full-screen rotating map, status strip on top, one bottom sheet for settings, route card + nav HUD. Road-sign vocabulary for markers. */
 :root{
   --bg:#f3f4f2; --panel:#ffffff; --fg:#1b1f24; --muted:#5d6670;
   --line:#d6d9dc; --accent:#f2b705; /* HGV amber */
-  --stop:#c8102e; --go:#1f7a3a; --info:#0057b8;
+  --stop:#c8102e; --go:#1f7a3a; --info:#0057b8; --blue:#0a84ff;
   --display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
   --body:"Atkinson Hyperlegible",system-ui,-apple-system,Segoe UI,sans-serif;
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#14181d; --panel:#1d2329; --fg:#eef1f3; --muted:#9aa4ae; --line:#323a42;
-  --accent:#f2b705; --stop:#ff5a6e; --go:#4cc47a; --info:#5aa2ff; color-scheme:dark}}
+  --stop:#ff5a6e; --go:#4cc47a; --info:#5aa2ff; color-scheme:dark}}
 *{box-sizing:border-box}
-html,body{height:100%;margin:0}
-body{background:var(--bg);color:var(--fg);font:15px/1.4 var(--body)}
-#map{position:fixed;inset:0;z-index:0;background:var(--bg)}
+html,body{height:100%;margin:0;overflow:hidden}
+body{background:var(--bg);color:var(--fg);font:15px/1.4 var(--body);-webkit-user-select:none;user-select:none}
+input{-webkit-user-select:text;user-select:text}
+#map{position:fixed;inset:0;z-index:0;background:#e8e6e1}
+[hidden]{display:none!important}
 .top{position:fixed;top:0;left:0;right:0;z-index:500;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
   padding:calc(env(safe-area-inset-top,0px) + 10px) max(12px,env(safe-area-inset-right,0px)) 10px max(12px,env(safe-area-inset-left,0px));
-  background:linear-gradient(var(--panel),color-mix(in srgb,var(--panel) 85%,transparent));border-bottom:1px solid var(--line)}
+  background:var(--panel);border-bottom:1px solid var(--line)}
 .brand{font:700 22px/1 var(--display);letter-spacing:.04em;text-transform:uppercase}
 .brand b{background:var(--accent);color:#14181d;padding:1px 6px;border-radius:3px;margin-right:4px}
+.brand small{font-size:12px;letter-spacing:.05em;color:var(--muted)}
 .pill{font:700 13px/1 var(--display);letter-spacing:.05em;text-transform:uppercase;padding:7px 10px;border-radius:999px;border:2px solid currentColor;white-space:nowrap}
 .pill.on{color:var(--stop)} .pill.off{color:var(--go)}
 .spacer{flex:1}
-button{font:700 15px/1 var(--display);letter-spacing:.05em;text-transform:uppercase;border:0;border-radius:8px;padding:11px 14px;cursor:pointer;background:var(--accent);color:#14181d}
+#loadMsg{font-size:13px;color:var(--muted)}
+button{font:700 15px/1 var(--display);letter-spacing:.05em;text-transform:uppercase;border:0;border-radius:10px;padding:12px 14px;cursor:pointer;background:var(--accent);color:#14181d;touch-action:manipulation}
 button.ghost{background:var(--panel);color:var(--fg);border:1px solid var(--line)}
-button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--info);outline-offset:2px}
-.fab{position:fixed;z-index:500;right:max(12px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:8px;
-  bottom:calc(env(safe-area-inset-bottom,0px) + 96px)}
-.fab button{width:48px;height:48px;padding:0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+button.blue{background:var(--blue);color:#fff}
+button.outline{background:transparent;color:var(--blue);border:1px solid var(--blue)}
+button:focus-visible,input:focus-visible{outline:3px solid var(--info);outline-offset:2px}
+
+/* map buttons */
+.fab{position:fixed;z-index:650;right:max(12px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:8px;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 92px)}
+body.has-route .fab{bottom:calc(env(safe-area-inset-bottom,0px) + 190px)}
+body.navigating .fab{bottom:calc(env(safe-area-inset-bottom,0px) + 104px)}
+.fab button{width:48px;height:48px;padding:0;font-size:22px;line-height:1;display:grid;place-items:center;
+  background:var(--panel);color:var(--fg);border:1px solid var(--line);box-shadow:0 2px 8px rgba(0,0,0,.22)}
+.fab svg{width:24px;height:24px;display:block}
+#compass svg{transition:transform .2s linear}
+body.navigating #refresh{display:none}
+
+/* settings sheet */
 .sheet{position:fixed;left:0;right:0;bottom:0;z-index:600;background:var(--panel);border-top:3px solid var(--accent);
   border-radius:14px 14px 0 0;box-shadow:0 -6px 24px rgba(0,0,0,.25);max-height:78vh;overflow:auto;
   padding:12px max(16px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 14px) max(16px,env(safe-area-inset-left,0px))}
+body.has-route .sheet, body.navigating .sheet, body.navigating .top{display:none}
 .tabs{display:flex;gap:6px;margin-bottom:10px}
 .tabs button{flex:1;background:transparent;color:var(--muted);border:1px solid var(--line)}
 .tabs button[aria-selected=true]{background:var(--accent);color:#14181d;border-color:var(--accent)}
 .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
 label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-input,select{font:16px var(--body);padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);min-width:0}
+input{font:16px var(--body);padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);min-width:0}
 .hint{font-size:13px;color:var(--muted);margin:8px 0 0}
 .status{font-size:13px;color:var(--muted);margin-top:8px;min-height:1.2em}
-.summary{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-variant-numeric:tabular-nums}
-.summary div{display:flex;flex-direction:column}
-.summary strong{font:700 26px/1 var(--display)}
-.summary span{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-.legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:6px;font-size:14px}
+.legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:6px}
 .legend label{flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--fg)}
 .collapsed .body{display:none}
 .grab{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .grab h2{font:700 18px/1 var(--display);text-transform:uppercase;letter-spacing:.05em;margin:0}
+
+/* route card (after planning) */
+.routecard{position:fixed;left:0;right:0;bottom:0;z-index:620;background:var(--panel);border-radius:18px 18px 0 0;box-shadow:0 -6px 24px rgba(0,0,0,.25);
+  padding:14px max(16px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 14px) max(16px,env(safe-area-inset-left,0px))}
+.summary{display:flex;gap:18px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+.summary div{display:flex;flex-direction:column}
+.summary strong{font:700 28px/1 var(--display)}
+.summary span{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.cardbtns{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.cardbtns .blue{flex:1;font-size:18px;padding:14px}
+#cardNote{font-size:13px;color:var(--muted);margin-top:8px}
+
 /* road-sign markers */
 .sign{width:34px;height:34px;border-radius:50%;background:#fff;border:4px solid #c8102e;display:grid;place-items:center;
-  font:700 11px/1 "Barlow Condensed",Arial,sans-serif;color:#111;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+  font:700 11px/1 "Barlow Condensed",Arial,sans-serif;color:#111;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:pointer}
 .sign.ok{border-color:#9aa4ae;opacity:.75}
-.sq{width:28px;height:28px;border-radius:5px;display:grid;place-items:center;font:700 15px/1 "Barlow Condensed",Arial,sans-serif;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
-.sq.park{background:#0057b8} .sq.load{background:#6b3fa0} .sq.mine{background:#f2b705;color:#111}
-.leaflet-popup-content{font:14px/1.4 var(--body)}
-.leaflet-popup-content h3{font:700 16px/1.1 var(--display);text-transform:uppercase;margin:0 0 4px}
-[hidden]{display:none!important}
-/* ---------- turn-by-turn ---------- */
-#startNav{background:#0a84ff;color:#fff}
-#demoNav{background:transparent;color:#0a84ff;border:1px solid #0a84ff}
-body.navigating .top, body.navigating .fab, body.navigating .sheet{display:none}
-.navtop{position:fixed;top:0;left:0;right:0;z-index:700;display:flex;gap:14px;align-items:center;background:#16191d;color:#fff;
-  padding:calc(env(safe-area-inset-top,0px) + 14px) max(16px,env(safe-area-inset-right,0px)) 16px max(16px,env(safe-area-inset-left,0px));
+.sq{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;font:700 15px/1 "Barlow Condensed",Arial,sans-serif;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:pointer}
+.sq svg{width:18px;height:18px}
+.sq.park{background:#0057b8} .sq.load{background:#6b3fa0} .sq.mine{background:#f2b705;color:#111} .sq.cam{background:#111}
+.dest{width:22px;height:22px;border-radius:50%;background:#d70015;border:4px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.4)}
+.me{width:46px;height:46px}
+.me svg{width:100%;height:100%;display:block;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4))}
+.dot{width:22px;height:22px;border-radius:50%;background:#0a84ff;border:4px solid #fff;box-shadow:0 0 0 8px rgba(10,132,255,.18),0 1px 4px rgba(0,0,0,.35)}
+.maplibregl-popup-content{font:14px/1.4 var(--body);color:#1b1f24;border-radius:10px;padding:12px 14px}
+.maplibregl-popup-content h3{font:700 16px/1.1 var(--display);text-transform:uppercase;margin:0 0 4px}
+.maplibregl-popup-content input{background:#f3f4f2;color:#1b1f24;border-color:#d6d9dc;width:100%}
+
+/* ---------- turn-by-turn HUD ---------- */
+.navtop{position:fixed;top:0;left:0;right:0;z-index:700;background:#16191d;color:#fff;
+  padding:calc(env(safe-area-inset-top,0px) + 14px) max(16px,env(safe-area-inset-right,0px)) 14px max(16px,env(safe-area-inset-left,0px));
   border-radius:0 0 18px 18px;box-shadow:0 6px 20px rgba(0,0,0,.35)}
+.navrow{display:flex;gap:14px;align-items:center}
 .navicon{width:62px;height:62px;flex:none;color:#fff}
 .navicon svg{width:100%;height:100%;display:block}
 .navmain{min-width:0;flex:1}
 .navdist{font:700 40px/1 var(--display);font-variant-numeric:tabular-nums}
 .navtext{font:700 19px/1.25 var(--body);margin-top:4px;overflow-wrap:anywhere}
 .navthen{font-size:14px;color:#b9c2cb;margin-top:6px}
+.camchip{display:flex;align-items:center;gap:8px;margin-top:10px;background:#ffd60a;color:#111;border-radius:10px;padding:8px 12px;font:700 16px/1 var(--display);letter-spacing:.04em;text-transform:uppercase}
+.camchip svg{width:20px;height:20px}
 .navbottom{position:fixed;left:0;right:0;bottom:0;z-index:700;background:var(--panel);display:flex;align-items:center;gap:10px;
   border-radius:18px 18px 0 0;box-shadow:0 -6px 20px rgba(0,0,0,.25);
   padding:14px max(16px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 14px) max(16px,env(safe-area-inset-left,0px))}
@@ -91,9 +122,17 @@ body.navigating .top, body.navigating .fab, body.navigating .sheet{display:none}
 .endbtn{background:#d70015;color:#fff;padding:14px 18px}
 .mutebtn{padding:12px 10px;min-width:64px}
 .recenter{position:fixed;z-index:700;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 104px);
-  background:#0a84ff;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.3)}
-.me{width:44px;height:44px;transition:transform .4s ease}
-.me svg{width:100%;height:100%;display:block;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4))}
+  background:var(--blue);color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.3)}
+/* speed box: current speed + limit sign, bottom-left like a sat nav */
+.speedbox{position:fixed;z-index:700;left:max(12px,env(safe-area-inset-left,0px));bottom:calc(env(safe-area-inset-bottom,0px) + 104px);
+  display:flex;align-items:flex-end;gap:8px}
+.spd{background:var(--panel);color:var(--fg);border-radius:14px;padding:8px 10px;min-width:64px;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+.spd strong{display:block;font:700 30px/1 var(--display);font-variant-numeric:tabular-nums}
+.spd span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.spd.over strong{color:#d70015}
+.limit{width:60px;height:60px;border-radius:50%;background:#fff;border:6px solid #d70015;display:grid;place-items:center;
+  font:700 26px/1 "Barlow Condensed",Arial,sans-serif;color:#111;box-shadow:0 2px 10px rgba(0,0,0,.3);position:relative}
+.limit small{position:absolute;bottom:-16px;left:50%;transform:translateX(-50%);background:#111;color:#fff;font-size:11px;padding:2px 6px;border-radius:6px;white-space:nowrap}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -101,30 +140,33 @@ body.navigating .top, body.navigating .fab, body.navigating .sheet{display:none}
 <div id="map" role="application" aria-label="Map"></div>
 
 <header class="top">
-  <div class="brand"><b>HGV</b>Cabside <small style="font-size:12px;letter-spacing:.05em;color:var(--muted)">v7</small></div>
+  <div class="brand"><b>HGV</b>Cabside <small>v8</small></div>
   <span id="llcs" class="pill" title="London Lorry Control Scheme">LLCS…</span>
   <span class="spacer"></span>
-  <span id="loadMsg" class="hint" style="margin:0"></span>
+  <span id="loadMsg"></span>
 </header>
 
 <div class="fab">
-  <button id="locate" class="ghost" aria-label="Show my location">◎</button>
-  <button id="refresh" class="ghost" aria-label="Reload restrictions here">↻</button>
+  <button id="zoomIn" aria-label="Zoom in">+</button>
+  <button id="zoomOut" aria-label="Zoom out">−</button>
+  <button id="compass" aria-label="Point map north"><svg viewBox="0 0 24 24"><path d="M12 2l4 10h-8z" fill="#d70015"/><path d="M12 22l-4-10h8z" fill="currentColor"/></svg></button>
+  <button id="locate" aria-label="Centre on me"><svg viewBox="0 0 24 24"><path d="M21 3L3 10.5l7.5 3 3 7.5z" fill="#0a84ff"/></svg></button>
+  <button id="refresh" aria-label="Reload restrictions here">↻</button>
 </div>
 
 <section id="sheet" class="sheet collapsed">
   <div class="grab">
-    <h2 id="sheetTitle">Your vehicle &amp; route</h2>
+    <h2>Your vehicle &amp; route</h2>
     <button id="toggle" class="ghost" aria-expanded="false">Open</button>
   </div>
   <div class="body">
     <div class="tabs" role="tablist">
-      <button role="tab" aria-selected="true" data-tab="vehicle">Vehicle</button>
-      <button role="tab" aria-selected="false" data-tab="route">Route</button>
+      <button role="tab" aria-selected="false" data-tab="vehicle">Vehicle</button>
+      <button role="tab" aria-selected="true" data-tab="route">Route</button>
       <button role="tab" aria-selected="false" data-tab="layers">Layers</button>
     </div>
 
-    <div data-panel="vehicle">
+    <div data-panel="vehicle" hidden>
       <div class="row">
         <label>Height (ft)<input id="hFt" type="number" inputmode="numeric" min="6" max="16" value="13"></label>
         <label>Height (in)<input id="hIn" type="number" inputmode="numeric" min="0" max="11" value="6"></label>
@@ -136,24 +178,16 @@ body.navigating .top, body.navigating .fab, body.navigating .sheet{display:none}
       <p class="hint">Restrictions below your dimensions show as red signs. Ones you clear are greyed out.</p>
     </div>
 
-    <div data-panel="route" hidden>
+    <div data-panel="route">
       <div class="row">
         <label>From<input id="from" placeholder="Postcode, or blank = my location" autocomplete="postal-code"></label>
         <label>To<input id="to" placeholder="Destination postcode" autocomplete="postal-code"></label>
       </div>
-      <p class="hint">Plans a truck route for the height, width, length and weight in Vehicle. Drive time uses the 56 mph limiter. No sign-up needed.</p>
+      <p class="hint">Plans a truck route for the height, width, length and weight in Vehicle. No sign-up needed.</p>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
         <button id="go">Plan HGV route</button>
-        <button id="startNav" hidden>Start</button>
-        <button id="demoNav" hidden>Demo drive</button>
-        <button id="clearRoute" class="ghost">Clear</button>
       </div>
       <div id="routeStatus" class="status"></div>
-      <div id="summary" class="summary" hidden>
-        <div><strong id="sDist">–</strong><span>Miles</span></div>
-        <div><strong id="sTime">–</strong><span>Drive time</span></div>
-        <div><strong id="sEta">–</strong><span>ETA</span></div>
-      </div>
     </div>
 
     <div data-panel="layers" hidden>
@@ -162,23 +196,45 @@ body.navigating .top, body.navigating .fab, body.navigating .sheet{display:none}
         <label><input type="checkbox" id="lyWeight" checked> Weight limits</label>
         <label><input type="checkbox" id="lyWidth" checked> Width limits</label>
         <label><input type="checkbox" id="lyNoHgv" checked> No-HGV roads</label>
+        <label><input type="checkbox" id="lyCam" checked> Speed cameras</label>
         <label><input type="checkbox" id="lyPark" checked> HGV parking</label>
         <label><input type="checkbox" id="lyLoad" checked> Loading bays</label>
         <label><input type="checkbox" id="lyMine" checked> My notes</label>
       </div>
-      <p class="hint">Press and hold the map to drop your own note, e.g. "gate round the back" or "bay always full". Notes stay on this phone.</p>
-      <p class="hint">Map data © OpenStreetMap contributors. Always obey road signs. This map is a guide, not a guarantee.</p>
+      <p class="hint">Press and hold the map to drop your own note, e.g. "gate round the back". Notes stay on this phone.</p>
+      <p class="hint">Map © OpenFreeMap, data © OpenStreetMap contributors. Always obey road signs. This map is a guide, not a guarantee.</p>
     </div>
   </div>
 </section>
 
-<div id="navTop" class="navtop" hidden aria-live="polite">
-  <div class="navicon" id="navIcon"></div>
-  <div class="navmain">
-    <div class="navdist" id="navDist">–</div>
-    <div class="navtext" id="navText">Starting…</div>
-    <div class="navthen" id="navThen" hidden></div>
+<section id="routeCard" class="routecard" hidden>
+  <div class="summary">
+    <div><strong id="sTime">–</strong><span>Drive time</span></div>
+    <div><strong id="sDist">–</strong><span>Miles</span></div>
+    <div><strong id="sEta">–</strong><span>Arrival</span></div>
   </div>
+  <div id="cardNote"></div>
+  <div class="cardbtns">
+    <button id="startNav" class="blue">Start</button>
+    <button id="demoNav" class="outline">Demo</button>
+    <button id="clearRoute" class="ghost">Clear</button>
+  </div>
+</section>
+
+<div id="navTop" class="navtop" hidden aria-live="polite">
+  <div class="navrow">
+    <div class="navicon" id="navIcon"></div>
+    <div class="navmain">
+      <div class="navdist" id="navDist">–</div>
+      <div class="navtext" id="navText">Starting…</div>
+      <div class="navthen" id="navThen" hidden></div>
+    </div>
+  </div>
+  <div id="camChip" class="camchip" hidden></div>
+</div>
+<div id="speedBox" class="speedbox" hidden>
+  <div class="spd" id="spdBox"><strong id="curSpd">0</strong><span>mph</span></div>
+  <div class="limit" id="limSign" hidden><span id="limNum"></span><small id="hgvCap" hidden></small></div>
 </div>
 <div id="navBottom" class="navbottom" hidden>
   <button id="navMute" class="ghost mutebtn">Voice on</button>
@@ -191,18 +247,20 @@ body.navigating .top, body.navigating .fab, body.navigating .sheet{display:none}
 </div>
 <button id="recenter" class="recenter" hidden>Re-centre</button>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script>
 "use strict";
-if (!window.L){
-  document.getElementById("map").innerHTML = '<p style="padding:120px 20px;font:16px system-ui;text-align:center">The map library didn\'t load. Open this page from its GitHub Pages link in Safari or Chrome, with mobile data or Wi-Fi on.</p>';
-  throw new Error("Leaflet missing");
+if (!window.maplibregl){
+  document.getElementById("map").innerHTML = '<p style="padding:140px 20px;font:16px system-ui;text-align:center">The map didn\'t load. Open this page from its GitHub Pages link in Safari, with mobile data or Wi-Fi on.</p>';
+  throw new Error("MapLibre missing");
 }
 const $ = id => document.getElementById(id);
 const store = {
   get(k, d){ try{ const v = localStorage.getItem("cabside:"+k); return v==null ? d : JSON.parse(v); }catch(e){ return d; } },
   set(k, v){ try{ localStorage.setItem("cabside:"+k, JSON.stringify(v)); }catch(e){} }
 };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const elFrom = html => { const d = document.createElement("div"); d.innerHTML = html.trim(); return d.firstElementChild; };
 
 /* ---------- Vehicle ---------- */
 const vehFields = ["hFt","hIn","wid","len","wt","axle"];
@@ -213,17 +271,16 @@ function vehicle(){
   return { heightM: (v.hFt*12 + v.hIn) * 0.0254, widthM: v.wid, lengthM: v.len, weightT: v.wt, axleT: v.axle };
 }
 vehFields.forEach(f => $(f).addEventListener("change", () => {
-  const o = {}; vehFields.forEach(g => o[g] = $(g).value); store.set("veh", o); renderRestrictions();
+  const o = {}; vehFields.forEach(g => o[g] = $(g).value); store.set("veh", o); renderRestrictions(); renderLlcs();
 }));
 
 /* ---------- London Lorry Control Scheme ----------
    Over 18t GVW: Mon–Fri 21:00–07:00, Sat 13:00 to Mon 07:00 (London Councils). */
 function llcsActive(d){
   const day = d.getDay(), m = d.getHours()*60 + d.getMinutes();
-  if (day === 0) return true;                 // Sunday
-  if (day === 6) return m >= 13*60 || m < 7*60; // Saturday: Fri-night tail + from 1pm
-  if (day === 1) return m < 7*60 || m >= 21*60; // Monday morning tail
-  return m < 7*60 || m >= 21*60;              // Tue–Fri
+  if (day === 0) return true;
+  if (day === 6) return m >= 13*60 || m < 7*60;
+  return m < 7*60 || m >= 21*60;
 }
 function nextChange(d){
   const t = new Date(d); t.setSeconds(0,0); const now = llcsActive(t);
@@ -232,212 +289,14 @@ function nextChange(d){
 }
 function renderLlcs(){
   const el = $("llcs"), now = new Date(), on = llcsActive(now), nc = nextChange(now);
-  const heavy = vehicle().weightT > 18;
   const when = nc ? nc.toLocaleString("en-GB",{weekday:"short",hour:"2-digit",minute:"2-digit"}) : "";
-  if (!heavy){ el.className = "pill off"; el.textContent = "LLCS n/a under 18t"; return; }
+  if (vehicle().weightT <= 18){ el.className = "pill off"; el.textContent = "LLCS n/a under 18t"; return; }
   el.className = "pill " + (on ? "on" : "off");
   el.textContent = on ? "LLCS ON · ends " + when : "LLCS off · starts " + when;
-  el.title = "London Lorry Control Scheme for vehicles over 18t. Bank holidays: check London Councils.";
 }
 renderLlcs(); setInterval(renderLlcs, 30000);
 
-/* ---------- Map ---------- */
-const start = store.get("view", { lat: 51.5072, lng: -0.1276, z: 14 });
-const map = L.map("map", { zoomControl: false }).setView([start.lat, start.lng], start.z);
-/* OpenStreetMap tiles; free, no key. */
-const TILE_SOURCES = [
-  ["https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19, attribution:"© OpenStreetMap contributors" }],
-  ["https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", { maxZoom:19, subdomains:"abc", attribution:"© OpenStreetMap contributors, HOT" }]
-];
-let tileIdx = 0, tiles = null;
-function useTiles(i){
-  if (tiles) map.removeLayer(tiles);
-  tileIdx = i; let errors = 0, loaded = 0;
-  tiles = L.tileLayer(TILE_SOURCES[i][0], TILE_SOURCES[i][1]).addTo(map);
-  tiles.on("tileload", () => { loaded++; });
-  tiles.on("tileerror", () => {
-    errors++;
-    if (errors >= 4 && loaded === 0){
-      if (tileIdx + 1 < TILE_SOURCES.length) useTiles(tileIdx + 1);
-      else $("loadMsg").textContent = "Map can't load. Open the GitHub Pages link in Safari or Chrome, with data on.";
-    }
-  });
-}
-useTiles(0);
-map.on("moveend", () => { const c = map.getCenter(); store.set("view", { lat: c.lat, lng: c.lng, z: map.getZoom() }); });
-
-const layers = {
-  height: L.layerGroup().addTo(map), weight: L.layerGroup().addTo(map), width: L.layerGroup().addTo(map),
-  nohgv: L.layerGroup().addTo(map), park: L.layerGroup().addTo(map), load: L.layerGroup().addTo(map),
-  mine: L.layerGroup().addTo(map), route: L.layerGroup().addTo(map), me: L.layerGroup().addTo(map)
-};
-const layerToggles = { lyHeight:"height", lyWeight:"weight", lyWidth:"width", lyNoHgv:"nohgv", lyPark:"park", lyLoad:"load", lyMine:"mine" };
-Object.entries(layerToggles).forEach(([id, k]) => $(id).addEventListener("change", e => e.target.checked ? layers[k].addTo(map) : map.removeLayer(layers[k])));
-
-/* ---------- Parsing OSM limits ---------- */
-function parseMetres(raw){
-  if (!raw) return null; const s = String(raw).trim().toLowerCase();
-  if (/^(none|default|unsigned|below_default)$/.test(s)) return null;
-  let m = s.match(/^(\d+)\s*'\s*(\d+(?:\.\d+)?)?\s*"?$/);          // 14'6"
-  if (m) return ((+m[1])*12 + (+(m[2]||0))) * 0.0254;
-  m = s.match(/^(\d+(?:\.\d+)?)\s*(ft|feet)$/); if (m) return +m[1]*0.3048;
-  m = s.match(/^(\d+(?:\.\d+)?)\s*m?$/); if (m) return +m[1];
-  return null;
-}
-function parseTonnes(raw){
-  if (!raw) return null; const s = String(raw).trim().toLowerCase();
-  let m = s.match(/^(\d+(?:\.\d+)?)\s*(t|tonnes?)?$/); if (m) return +m[1];
-  m = s.match(/^(\d+(?:\.\d+)?)\s*(st|tons?)$/); if (m) return +m[1]*0.907;
-  return null;
-}
-const ftIn = metres => { const inch = Math.round(metres/0.0254); return Math.floor(inch/12) + "'" + (inch%12) + '"'; };
-const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
-
-/* ---------- Overpass loader ---------- */
-let features = [];
-const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
-async function loadArea(){
-  if (map.getZoom() < 13){ $("loadMsg").textContent = "Zoom in to load restrictions"; return; }
-  const b = map.getBounds(), bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map(n => n.toFixed(5)).join(",");
-  const q = `[out:json][timeout:25];(
-    nwr["maxheight"](${bbox}); nwr["maxheight:physical"](${bbox});
-    way["maxweight"](${bbox}); way["maxweight:hgv"](${bbox}); node["maxweight"](${bbox});
-    way["maxwidth"](${bbox}); node["maxwidth"](${bbox});
-    way["highway"]["hgv"="no"](${bbox});
-    nwr["amenity"="parking"]["hgv"~"yes|designated"](${bbox});
-    nwr["highway"="services"]["hgv"~"yes|designated"](${bbox});
-    nwr["amenity"="loading_dock"](${bbox});
-    nwr["parking_space"~"loading|delivery"](${bbox});
-    nwr["parking"]["access"="delivery"](${bbox});
-  );out tags center geom qt 2500;`;
-  { const c = map.getCenter(); lastLoad = [c.lat, c.lng]; }
-  $("loadMsg").textContent = "Loading restrictions…";
-  for (const url of OVERPASS){
-    try{
-      const r = await fetch(url, { method:"POST", body: "data=" + encodeURIComponent(q) });
-      if (!r.ok) throw new Error(r.status);
-      const j = await r.json(); features = j.elements || []; renderRestrictions();
-      $("loadMsg").textContent = features.length + " items loaded"; return;
-    }catch(e){ /* try next mirror */ }
-  }
-  $("loadMsg").textContent = "Couldn't load restrictions. Tap ↻ to retry.";
-}
-let loadTimer, lastLoad = null;
-map.on("moveend", () => {
-  const c = map.getCenter();
-  if (nav && nav.on && lastLoad && distM(lastLoad, [c.lat, c.lng]) < 1500) return; // don't hammer the server while driving
-  clearTimeout(loadTimer); loadTimer = setTimeout(loadArea, 600);
-});
-$("refresh").addEventListener("click", loadArea);
-
-function pos(el){ return el.center ? [el.center.lat, el.center.lon] : (el.lat != null ? [el.lat, el.lon] : null); }
-function signIcon(text, bad){ return L.divIcon({ className:"", html:`<div class="sign ${bad?"":"ok"}">${esc(text)}</div>`, iconSize:[34,34], iconAnchor:[17,17] }); }
-function sqIcon(cls, text){ return L.divIcon({ className:"", html:`<div class="sq ${cls}">${text}</div>`, iconSize:[28,28], iconAnchor:[14,14] }); }
-function popup(title, t){
-  const name = t.name || t["addr:street"] || ""; const extra = [];
-  if (t.fee) extra.push("Fee: " + esc(t.fee)); if (t.capacity) extra.push("Spaces: " + esc(t.capacity));
-  if (t.opening_hours) extra.push("Hours: " + esc(t.opening_hours)); if (t.maxstay) extra.push("Max stay: " + esc(t.maxstay));
-  if (t.note) extra.push(esc(t.note));
-  return `<h3>${esc(title)}</h3>${name ? esc(name)+"<br>" : ""}${extra.join("<br>")}`;
-}
-
-function renderRestrictions(){
-  ["height","weight","width","nohgv","park","load"].forEach(k => layers[k].clearLayers());
-  const v = vehicle();
-  for (const el of features){
-    const t = el.tags || {}, p = pos(el); if (!p) continue;
-    const h = parseMetres(t["maxheight:physical"] || t.maxheight);
-    if (h){
-      const bad = h < v.heightM + 0.05;
-      L.marker(p, { icon: signIcon(ftIn(h), bad), zIndexOffset: bad ? 1000 : 0 }).addTo(layers.height)
-        .bindPopup(popup("Height limit " + ftIn(h) + " (" + h.toFixed(1) + " m)", t) + (bad ? "<br><b>Too low for your vehicle</b>" : "<br>You clear this"));
-      continue;
-    }
-    const w = parseTonnes(t["maxweight:hgv"] || t.maxweight);
-    if (w){
-      const bad = w < v.weightT;
-      const exc = t["maxweight:conditional"] || t["maxweight:hgv:conditional"] || "";
-      L.marker(p, { icon: signIcon(w + "T", bad) }).addTo(layers.weight)
-        .bindPopup(popup("Weight limit " + w + " t", t) + (exc ? "<br>Except: " + esc(exc) : "") + (bad ? "<br><b>Over the limit at your weight</b>" + (/delivery|access/i.test(exc) ? " (unless loading/access)" : "") : ""));
-      continue;
-    }
-    const wd = parseMetres(t.maxwidth);
-    if (wd){
-      const bad = wd < v.widthM + 0.05;
-      L.marker(p, { icon: signIcon(wd.toFixed(1) + "m", bad) }).addTo(layers.width)
-        .bindPopup(popup("Width limit " + wd.toFixed(2) + " m", t) + (bad ? "<br><b>Too narrow</b>" : ""));
-      continue;
-    }
-    if (t.hgv === "no" && el.geometry){
-      L.polyline(el.geometry.map(g => [g.lat, g.lon]), { color:"#c8102e", weight:5, opacity:.7, dashArray:"6 6" })
-        .addTo(layers.nohgv).bindPopup(popup("No HGVs", t));
-      continue;
-    }
-    if (t.amenity === "parking" || t.highway === "services"){
-      L.marker(p, { icon: sqIcon("park","P") }).addTo(layers.park).bindPopup(popup(t.highway === "services" ? "Services · HGV parking" : "HGV parking", t));
-      continue;
-    }
-    L.marker(p, { icon: sqIcon("load","L") }).addTo(layers.load).bindPopup(popup(t.amenity === "loading_dock" ? "Loading dock" : "Loading bay", t));
-  }
-}
-
-/* ---------- My notes (long press) ---------- */
-let notes = store.get("notes", []);
-function renderNotes(){
-  layers.mine.clearLayers();
-  notes.forEach((n, i) => {
-    const m = L.marker([n.lat, n.lng], { icon: sqIcon("mine","!") }).addTo(layers.mine);
-    const div = document.createElement("div");
-    div.innerHTML = `<h3>My note</h3><p style="margin:0 0 8px">${esc(n.text)}</p>`;
-    const del = document.createElement("button"); del.className = "ghost"; del.textContent = "Delete";
-    del.onclick = () => { notes.splice(i,1); store.set("notes", notes); renderNotes(); };
-    div.appendChild(del); m.bindPopup(div);
-  });
-}
-map.on("contextmenu", e => {
-  const div = document.createElement("div");
-  div.innerHTML = `<h3>Add note</h3>`;
-  const inp = document.createElement("input"); inp.id = "noteText"; inp.placeholder = "e.g. gate round the back"; inp.style.width = "100%";
-  const save = document.createElement("button"); save.textContent = "Save"; save.style.marginTop = "8px";
-  save.onclick = () => { const txt = inp.value.trim(); if (!txt) return; notes.push({ lat:e.latlng.lat, lng:e.latlng.lng, text:txt }); store.set("notes", notes); map.closePopup(); renderNotes(); };
-  div.append(inp, save);
-  L.popup().setLatLng(e.latlng).setContent(div).openOn(map); setTimeout(() => inp.focus(), 50);
-});
-renderNotes();
-
-/* ---------- Location ---------- */
-let myPos = null;
-function locate(fly){
-  if (!navigator.geolocation){ $("loadMsg").textContent = "Location not available on this device"; return; }
-  navigator.geolocation.getCurrentPosition(p => {
-    myPos = [p.coords.latitude, p.coords.longitude];
-    layers.me.clearLayers();
-    L.circleMarker(myPos, { radius:9, color:"#fff", weight:3, fillColor:"#0057b8", fillOpacity:1 }).addTo(layers.me);
-    if (fly) map.setView(myPos, Math.max(map.getZoom(), 15));
-  }, () => { $("loadMsg").textContent = "Allow location to centre the map on you"; }, { enableHighAccuracy:true, timeout:10000 });
-}
-$("locate").addEventListener("click", () => locate(true));
-
-/* ---------- Routing ---------- */
-function decodePolyline6(str){
-  let i = 0, lat = 0, lng = 0; const out = [];
-  while (i < str.length){
-    for (const which of [0,1]){
-      let shift = 0, result = 0, b;
-      do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-      const d = (result & 1) ? ~(result >> 1) : (result >> 1);
-      if (which === 0) lat += d; else lng += d;
-    }
-    out.push([lat / 1e6, lng / 1e6]);
-  }
-  return out;
-}
-async function postcode(pc){
-  const r = await fetch("https://api.postcodes.io/postcodes/" + encodeURIComponent(pc.replace(/\s+/g,"")));
-  if (!r.ok) throw new Error("Postcode not found: " + pc);
-  const j = await r.json(); return [j.result.latitude, j.result.longitude];
-}
-/* Geometry helpers */
+/* ---------- Geometry ---------- */
 const R_EARTH = 6371000, RAD = Math.PI / 180;
 function distM(a, b){
   const x = (b[1]-a[1]) * RAD * Math.cos((a[0]+b[0]) / 2 * RAD), y = (b[0]-a[0]) * RAD;
@@ -457,79 +316,432 @@ function bearing(a, b){
   return (Math.atan2(y, x) / RAD + 360) % 360;
 }
 
-/* Valhalla truck routing (FOSSGIS public server, free, no key) */
-async function callValhalla(body){
+/* ---------- Map (MapLibre + OpenFreeMap, falls back to OSM raster) ---------- */
+const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const OSM_RASTER = { version: 8,
+  sources: { osm: { type:"raster", tiles:["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize:256, maxzoom:19, attribution:"© OpenStreetMap contributors" } },
+  layers: [{ id:"osm", type:"raster", source:"osm" }] };
+const startView = store.get("view2", { lng:-0.1276, lat:51.5072, z:13 });
+const map = new maplibregl.Map({
+  container: "map", style: STYLE_URL, center: [startView.lng, startView.lat], zoom: startView.z,
+  attributionControl: { compact: true }, maxPitch: 60, dragRotate: true, touchPitch: true
+});
+let styleReady = false, usedFallback = false;
+function fallbackStyle(){ if (usedFallback) return; usedFallback = true; map.setStyle(OSM_RASTER); }
+const styleTimer = setTimeout(() => { if (!styleReady) fallbackStyle(); }, 9000);
+map.on("error", () => { if (!styleReady && !usedFallback) { clearTimeout(styleTimer); fallbackStyle(); } });
+map.on("style.load", () => { styleReady = true; clearTimeout(styleTimer); addOverlays(); });
+
+const EMPTY = { type:"FeatureCollection", features:[] };
+let routeData = EMPTY, nohgvData = EMPTY;
+const layerOn = { height:true, weight:true, width:true, nohgv:true, cam:true, park:true, load:true, mine:true };
+function addOverlays(){
+  if (!map.getSource("nohgv")){
+    map.addSource("nohgv", { type:"geojson", data: nohgvData });
+    map.addLayer({ id:"nohgv", type:"line", source:"nohgv",
+      layout:{ visibility: layerOn.nohgv ? "visible" : "none", "line-cap":"round" },
+      paint:{ "line-color":"#c8102e", "line-width":5, "line-opacity":.75, "line-dasharray":[1.2, 1.2] } });
+  }
+  if (!map.getSource("route")){
+    map.addSource("route", { type:"geojson", data: routeData });
+    map.addLayer({ id:"route-casing", type:"line", source:"route", layout:{ "line-cap":"round", "line-join":"round" },
+      paint:{ "line-color":"#0b4fa8", "line-width":["interpolate",["linear"],["zoom"], 8,6, 14,12, 18,22] } });
+    map.addLayer({ id:"route-line", type:"line", source:"route", layout:{ "line-cap":"round", "line-join":"round" },
+      paint:{ "line-color":"#0a84ff", "line-width":["interpolate",["linear"],["zoom"], 8,3.5, 14,8, 18,15] } });
+  }
+}
+function setRouteLine(latlngs){
+  routeData = latlngs && latlngs.length > 1
+    ? { type:"Feature", properties:{}, geometry:{ type:"LineString", coordinates: latlngs.map(p => [p[1], p[0]]) } } : EMPTY;
+  const s = map.getSource("route"); if (s) s.setData(routeData);
+}
+function setNoHgv(fc){ nohgvData = fc; const s = map.getSource("nohgv"); if (s) s.setData(fc); }
+map.on("click", "nohgv", e => {
+  const name = e.features && e.features[0] && e.features[0].properties.name;
+  new maplibregl.Popup({ offset: 6 }).setLngLat(e.lngLat).setHTML("<h3>No HGVs</h3>" + (name ? esc(name) : "")).addTo(map);
+});
+
+/* marker groups */
+const groups = { height:[], weight:[], width:[], cam:[], park:[], load:[], mine:[] };
+function addMarker(group, lat, lng, html, popupHtml){
+  const m = new maplibregl.Marker({ element: elFrom(html) }).setLngLat([lng, lat]);
+  if (popupHtml != null){
+    const pop = new maplibregl.Popup({ offset: 20, maxWidth: "260px" });
+    if (typeof popupHtml === "string") pop.setHTML(popupHtml); else pop.setDOMContent(popupHtml);
+    m.setPopup(pop);
+  }
+  groups[group].push(m); if (layerOn[group]) m.addTo(map);
+  return m;
+}
+function clearGroup(g){ groups[g].forEach(m => m.remove()); groups[g] = []; }
+const layerToggles = { lyHeight:"height", lyWeight:"weight", lyWidth:"width", lyNoHgv:"nohgv", lyCam:"cam", lyPark:"park", lyLoad:"load", lyMine:"mine" };
+Object.entries(layerToggles).forEach(([id, k]) => $(id).addEventListener("change", e => {
+  layerOn[k] = e.target.checked;
+  if (k === "nohgv"){ if (map.getLayer("nohgv")) map.setLayoutProperty("nohgv", "visibility", layerOn.nohgv ? "visible" : "none"); return; }
+  groups[k].forEach(m => layerOn[k] ? m.addTo(map) : m.remove());
+}));
+
+/* ---------- Map buttons ---------- */
+$("zoomIn").addEventListener("click", () => {
+  if (nav.on && nav.follow){ nav.zoom = Math.min(19, nav.zoom + 1); if (myPos) followMe(myPos, nav.lastHdg, true); }
+  else map.zoomIn();
+});
+$("zoomOut").addEventListener("click", () => {
+  if (nav.on && nav.follow){ nav.zoom = Math.max(11, nav.zoom - 1); if (myPos) followMe(myPos, nav.lastHdg, true); }
+  else map.zoomOut();
+});
+$("compass").addEventListener("click", () => {
+  if (nav.on){
+    nav.headingUp = !nav.headingUp; store.set("headingUp", nav.headingUp);
+    nav.follow = true; $("recenter").hidden = true;
+    if (myPos) followMe(myPos, nav.lastHdg, true);
+  } else map.easeTo({ bearing: 0, pitch: 0, duration: 500 });
+});
+map.on("rotate", () => { $("compass").querySelector("svg").style.transform = "rotate(" + (-map.getBearing()) + "deg)"; });
+$("locate").addEventListener("click", () => {
+  if (nav.on){ nav.follow = true; $("recenter").hidden = true; if (myPos) followMe(myPos, nav.lastHdg, true); return; }
+  if (myPos) map.easeTo({ center: [myPos[1], myPos[0]], zoom: Math.max(map.getZoom(), 15), duration: 800 });
+  else { $("loadMsg").textContent = "Finding you…"; startWatch(true); }
+});
+
+/* ---------- Restrictions from OpenStreetMap (Overpass) ---------- */
+function parseMetres(raw){
+  if (!raw) return null; const s = String(raw).trim().toLowerCase();
+  if (/^(none|default|unsigned|below_default)$/.test(s)) return null;
+  let m = s.match(/^(\d+)\s*'\s*(\d+(?:\.\d+)?)?\s*"?$/);
+  if (m) return ((+m[1])*12 + (+(m[2]||0))) * 0.0254;
+  m = s.match(/^(\d+(?:\.\d+)?)\s*(ft|feet)$/); if (m) return +m[1]*0.3048;
+  m = s.match(/^(\d+(?:\.\d+)?)\s*m?$/); if (m) return +m[1];
+  return null;
+}
+function parseTonnes(raw){
+  if (!raw) return null; const s = String(raw).trim().toLowerCase();
+  let m = s.match(/^(\d+(?:\.\d+)?)\s*(t|tonnes?)?$/); if (m) return +m[1];
+  m = s.match(/^(\d+(?:\.\d+)?)\s*(st|tons?)$/); if (m) return +m[1]*0.907;
+  return null;
+}
+const ftIn = metres => { const inch = Math.round(metres/0.0254); return Math.floor(inch/12) + "'" + (inch%12) + '"'; };
+const CAM_SVG = '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="15" height="10" rx="2" fill="#fff"/><path d="M17 10l5-3v10l-5-3z" fill="#fff"/><circle cx="9.5" cy="12" r="3" fill="#111"/></svg>';
+
+let features = [], lastLoad = null, loadTimer = null;
+const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+async function overpass(q){
+  for (const url of OVERPASS){
+    try{
+      const r = await fetch(url, { method:"POST", body: "data=" + encodeURIComponent(q) });
+      if (r.ok) return await r.json();
+    }catch(e){}
+  }
+  return null;
+}
+async function loadArea(){
+  if (map.getZoom() < 12.5){ if (!nav.on) $("loadMsg").textContent = "Zoom in to see restrictions"; return; }
+  const c = map.getCenter(); lastLoad = [c.lat, c.lng];
+  let bbox;
+  if (nav.on || map.getPitch() > 10) bbox = [c.lat-0.02, c.lng-0.032, c.lat+0.02, c.lng+0.032];
+  else { const b = map.getBounds(); bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()]; }
+  bbox = bbox.map(n => n.toFixed(5)).join(",");
+  const q = `[out:json][timeout:25];(
+    nwr["maxheight"](${bbox}); nwr["maxheight:physical"](${bbox});
+    way["maxweight"](${bbox}); way["maxweight:hgv"](${bbox}); node["maxweight"](${bbox});
+    way["maxwidth"](${bbox}); node["maxwidth"](${bbox});
+    way["highway"]["hgv"="no"](${bbox});
+    node["highway"="speed_camera"](${bbox});
+    nwr["amenity"="parking"]["hgv"~"yes|designated"](${bbox});
+    nwr["highway"="services"]["hgv"~"yes|designated"](${bbox});
+    nwr["amenity"="loading_dock"](${bbox});
+    nwr["parking_space"~"loading|delivery"](${bbox});
+    nwr["parking"]["access"="delivery"](${bbox});
+  );out tags center geom qt 2500;`;
+  if (!nav.on) $("loadMsg").textContent = "Loading restrictions…";
+  const j = await overpass(q);
+  if (!j){ if (!nav.on) $("loadMsg").textContent = "Couldn't load restrictions. Tap ↻ to retry."; return; }
+  features = j.elements || []; renderRestrictions();
+  if (!nav.on) $("loadMsg").textContent = features.length + " items loaded";
+}
+map.on("moveend", () => {
+  const c = map.getCenter();
+  if (!nav.on) store.set("view2", { lng: c.lng, lat: c.lat, z: map.getZoom() });
+  if (nav.on && lastLoad && distM(lastLoad, [c.lat, c.lng]) < 1500) return;
+  clearTimeout(loadTimer); loadTimer = setTimeout(loadArea, 700);
+});
+$("refresh").addEventListener("click", loadArea);
+
+function pos(el){ return el.center ? [el.center.lat, el.center.lon] : (el.lat != null ? [el.lat, el.lon] : null); }
+function popup(title, t){
+  const name = t.name || t["addr:street"] || ""; const extra = [];
+  if (t.fee) extra.push("Fee: " + esc(t.fee)); if (t.capacity) extra.push("Spaces: " + esc(t.capacity));
+  if (t.opening_hours) extra.push("Hours: " + esc(t.opening_hours)); if (t.maxstay) extra.push("Max stay: " + esc(t.maxstay));
+  if (t.note) extra.push(esc(t.note));
+  return `<h3>${esc(title)}</h3>${name ? esc(name)+"<br>" : ""}${extra.join("<br>")}`;
+}
+function renderRestrictions(){
+  ["height","weight","width","cam","park","load"].forEach(clearGroup);
+  const v = vehicle(), lines = [];
+  for (const el of features){
+    const t = el.tags || {}, p = pos(el);
+    if (t.hgv === "no" && el.geometry && el.type === "way"){
+      lines.push({ type:"Feature", properties:{ name: t.name || "" }, geometry:{ type:"LineString", coordinates: el.geometry.map(g => [g.lon, g.lat]) } });
+      continue;
+    }
+    if (!p) continue;
+    if (t.highway === "speed_camera"){
+      addMarker("cam", p[0], p[1], `<div class="sq cam">${CAM_SVG}</div>`, "<h3>Speed camera</h3>" + (t.maxspeed ? "Limit: " + esc(t.maxspeed) : ""));
+      continue;
+    }
+    const h = parseMetres(t["maxheight:physical"] || t.maxheight);
+    if (h){
+      const bad = h < v.heightM + 0.05;
+      addMarker("height", p[0], p[1], `<div class="sign ${bad?"":"ok"}">${esc(ftIn(h))}</div>`,
+        popup("Height limit " + ftIn(h) + " (" + h.toFixed(1) + " m)", t) + (bad ? "<br><b>Too low for your vehicle</b>" : "<br>You clear this"));
+      continue;
+    }
+    const w = parseTonnes(t["maxweight:hgv"] || t.maxweight);
+    if (w){
+      const bad = w < v.weightT, exc = t["maxweight:conditional"] || t["maxweight:hgv:conditional"] || "";
+      addMarker("weight", p[0], p[1], `<div class="sign ${bad?"":"ok"}">${esc(w)}T</div>`,
+        popup("Weight limit " + w + " t", t) + (exc ? "<br>Except: " + esc(exc) : "") + (bad ? "<br><b>Over the limit at your weight</b>" + (/delivery|access/i.test(exc) ? " (unless loading/access)" : "") : ""));
+      continue;
+    }
+    const wd = parseMetres(t.maxwidth);
+    if (wd){
+      const bad = wd < v.widthM + 0.05;
+      addMarker("width", p[0], p[1], `<div class="sign ${bad?"":"ok"}">${wd.toFixed(1)}m</div>`,
+        popup("Width limit " + wd.toFixed(2) + " m", t) + (bad ? "<br><b>Too narrow</b>" : ""));
+      continue;
+    }
+    if (t.amenity === "parking" || t.highway === "services"){
+      addMarker("park", p[0], p[1], '<div class="sq park">P</div>', popup(t.highway === "services" ? "Services · HGV parking" : "HGV parking", t));
+      continue;
+    }
+    if (t.amenity === "loading_dock" || t.parking_space || t.parking)
+      addMarker("load", p[0], p[1], '<div class="sq load">L</div>', popup(t.amenity === "loading_dock" ? "Loading dock" : "Loading bay", t));
+  }
+  setNoHgv({ type:"FeatureCollection", features: lines });
+}
+
+/* ---------- My notes (press and hold) ---------- */
+let notes = store.get("notes", []);
+function renderNotes(){
+  clearGroup("mine");
+  notes.forEach((n, i) => {
+    const div = document.createElement("div");
+    div.innerHTML = `<h3>My note</h3><p style="margin:0 0 8px">${esc(n.text)}</p>`;
+    const del = document.createElement("button"); del.className = "ghost"; del.textContent = "Delete";
+    del.onclick = () => { notes.splice(i,1); store.set("notes", notes); renderNotes(); };
+    div.appendChild(del);
+    addMarker("mine", n.lat, n.lng, '<div class="sq mine">!</div>', div);
+  });
+}
+function addNoteAt(ll){
+  const div = document.createElement("div");
+  div.innerHTML = "<h3>Add note</h3>";
+  const inp = document.createElement("input"); inp.id = "noteText"; inp.placeholder = "e.g. gate round the back";
+  const save = document.createElement("button"); save.textContent = "Save"; save.style.marginTop = "8px";
+  div.append(inp, save);
+  const pop = new maplibregl.Popup({ offset: 6, maxWidth: "260px" }).setLngLat(ll).setDOMContent(div).addTo(map);
+  save.onclick = () => { const txt = inp.value.trim(); if (!txt) return; notes.push({ lat: ll.lat, lng: ll.lng, text: txt }); store.set("notes", notes); pop.remove(); renderNotes(); };
+  setTimeout(() => inp.focus(), 60);
+}
+let lpTimer = null, lpPoint = null;
+map.on("touchstart", e => {
+  if (!e.originalEvent.touches || e.originalEvent.touches.length !== 1) { clearTimeout(lpTimer); lpTimer = null; return; }
+  lpPoint = e.point; const ll = e.lngLat;
+  lpTimer = setTimeout(() => { lpTimer = null; if (!nav.on) addNoteAt(ll); }, 650);
+});
+map.on("touchmove", e => { if (lpTimer && lpPoint && (Math.abs(e.point.x - lpPoint.x) > 10 || Math.abs(e.point.y - lpPoint.y) > 10)){ clearTimeout(lpTimer); lpTimer = null; } });
+map.on("touchend", () => { clearTimeout(lpTimer); lpTimer = null; });
+map.on("contextmenu", e => { if (!nav.on) addNoteAt(e.lngLat); });
+renderNotes();
+
+/* ---------- Your position ---------- */
+let myPos = null, watchId = null, meMarker = null, meMode = "", wantCentre = false;
+const ME_ARROW = '<div class="me"><svg viewBox="0 0 46 46"><circle cx="23" cy="23" r="21" fill="#fff"/><path d="M23 7l12 30-12-6.5L11 37z" fill="#0a84ff"/></svg></div>';
+function placeMe(here, hdg, arrow){
+  const mode = arrow ? "arrow" : "dot";
+  if (!meMarker || meMode !== mode){
+    if (meMarker) meMarker.remove();
+    meMarker = new maplibregl.Marker({ element: elFrom(arrow ? ME_ARROW : '<div class="dot"></div>'), rotationAlignment: arrow ? "map" : "viewport", pitchAlignment: "map" })
+      .setLngLat([here[1], here[0]]).addTo(map);
+    meMode = mode;
+  } else meMarker.setLngLat([here[1], here[0]]);
+  if (arrow) meMarker.setRotation(hdg || 0);
+}
+function onPos(p){
+  if (nav.sim) return;                     // demo drive feeds its own positions
+  const here = [p.coords.latitude, p.coords.longitude];
+  myPos = here;
+  if (nav.on) navFix(p);
+  else {
+    placeMe(here, 0, false);
+    if (wantCentre){ wantCentre = false; $("loadMsg").textContent = ""; map.easeTo({ center: [here[1], here[0]], zoom: Math.max(map.getZoom(), 15), duration: 800 }); }
+  }
+}
+function onPosErr(){
+  if (nav.on && !nav.sim) $("navText").textContent = "Waiting for GPS… allow location for this site in Settings → Privacy → Location Services → Safari Websites.";
+  else if (!myPos) $("loadMsg").textContent = "Allow location to see yourself on the map";
+}
+function startWatch(centre){
+  if (!navigator.geolocation){ $("loadMsg").textContent = "Location isn't available on this device"; return; }
+  if (centre) wantCentre = true;
+  if (watchId != null) return;
+  watchId = navigator.geolocation.watchPosition(onPos, onPosErr, { enableHighAccuracy:true, maximumAge:1000, timeout:20000 });
+}
+
+/* ---------- Routing (Valhalla truck routing, FOSSGIS public server, no key) ---------- */
+function decodePolyline6(str){
+  let i = 0, lat = 0, lng = 0; const out = [];
+  while (i < str.length){
+    for (const which of [0,1]){
+      let shift = 0, result = 0, b;
+      do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      const d = (result & 1) ? ~(result >> 1) : (result >> 1);
+      if (which === 0) lat += d; else lng += d;
+    }
+    out.push([lat / 1e6, lng / 1e6]);
+  }
+  return out;
+}
+async function postcode(pc){
+  let r;
+  try{ r = await fetch("https://api.postcodes.io/postcodes/" + encodeURIComponent(pc.replace(/\s+/g,""))); }
+  catch(e){ throw new Error("Couldn't look up the postcode. Check your signal."); }
+  if (!r.ok) throw new Error("Postcode not found: " + pc);
+  const j = await r.json(); return [j.result.latitude, j.result.longitude];
+}
+const VALHALLA = "https://valhalla1.openstreetmap.de";
+async function valhalla(path, body){
   try{
-    return await fetch("https://valhalla1.openstreetmap.de/route", {
-      method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
-    });
+    return await fetch(VALHALLA + path, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
   }catch(e){ throw new Error("Couldn't reach the routing service. Check your signal and try again."); }
 }
-async function fetchRoute(from, to){
+function truckOpts(){
   const v = vehicle();
-  const base = {
-    locations: [{ lat: from[0], lon: from[1] }, { lat: to[0], lon: to[1] }],
-    costing: "truck",
-    costing_options: { truck: {
-      height: +v.heightM.toFixed(2), width: v.widthM, length: v.lengthM,
-      weight: v.weightT, axle_load: v.axleT, top_speed: 90
-    } },
-    units: "miles"
-  };
-  let r = await callValhalla(Object.assign({ language: "en-GB" }, base));
-  if (r.status === 400) r = await callValhalla(base);          // fall back if en-GB voice text isn't offered
+  return { truck: { height: +v.heightM.toFixed(2), width: v.widthM, length: v.lengthM, weight: v.weightT, axle_load: v.axleT, top_speed: 90 } };
+}
+async function fetchRoute(from, to){
+  const base = { locations: [{ lat: from[0], lon: from[1] }, { lat: to[0], lon: to[1] }], costing: "truck", costing_options: truckOpts(), units: "miles" };
+  let r = await valhalla("/route", Object.assign({ language: "en-GB" }, base));
+  if (r.status === 400) r = await valhalla("/route", base);
   if (r.status === 429) throw new Error("The free routing service is busy. Wait a minute and try again.");
   if (!r.ok) throw new Error("No truck route found for your size and weight between these places.");
   const j = await r.json(), leg = j.trip.legs[0];
   const pts = decodePolyline6(leg.shape), cum = [0];
   for (let i = 1; i < pts.length; i++) cum.push(cum[i-1] + distM(pts[i-1], pts[i]));
-  return { pts, cum, man: leg.maneuvers || [], time: j.trip.summary.time, len: cum[cum.length-1], to };
+  const R = { pts, cum, man: leg.maneuvers || [], time: j.trip.summary.time, len: cum[cum.length-1], to, limits: [], cams: [] };
+  enrichRoute(R);           // speed limits and cameras load in the background
+  return R;
 }
 
-let currentRoute = null, routeCasing = null, routeLine = null;
-function drawRoute(R){
-  layers.route.clearLayers();
-  routeCasing = L.polyline(R.pts, { color:"#0b4fa8", weight:12, opacity:1, lineCap:"round", lineJoin:"round" }).addTo(layers.route);
-  routeLine = L.polyline(R.pts, { color:"#0a84ff", weight:8, opacity:1, lineCap:"round", lineJoin:"round" }).addTo(layers.route);
-  L.circleMarker(R.to, { radius:9, color:"#fff", weight:3, fillColor:"#d70015", fillOpacity:1 }).addTo(layers.route);
-  return routeLine;
+/* speed limits along the route */
+function hgvLimit(posted, rc){
+  if (vehicle().weightT <= 7.5) return posted;
+  if (rc === "motorway") return Math.min(posted || 70, 60);
+  if (posted == null) return null;
+  if (posted >= 70) return 60;          // dual carriageway national limit for HGVs (England & Wales)
+  if (posted === 60) return 50;         // single carriageway national limit for HGVs (England & Wales)
+  return posted;
 }
+async function fetchLimits(R){
+  const out = []; let s0 = 0;
+  for (let c = 0; c < 8 && s0 < R.pts.length - 1; c++){
+    let s1 = s0; while (s1 < R.pts.length - 1 && R.cum[s1] - R.cum[s0] < 90000) s1++;
+    const body = { shape: R.pts.slice(s0, s1 + 1).map(p => ({ lat: p[0], lon: p[1] })), costing: "truck", costing_options: truckOpts(),
+      shape_match: "map_snap", units: "kilometers",
+      filters: { attributes: ["edge.speed_limit", "edge.road_class", "edge.length"], action: "include" } };
+    let r; try{ r = await valhalla("/trace_attributes", body); }catch(e){ break; }
+    if (!r.ok) break;
+    const j = await r.json(); let a = R.cum[s0];
+    for (const e of (j.edges || [])){
+      const len = (e.length || 0) * 1000, kph = e.speed_limit;
+      const mph = (typeof kph === "number" && kph > 0 && kph < 200) ? Math.round(kph / 1.609344 / 5) * 5 : null;
+      out.push({ from: a, to: a + len, posted: mph, rc: e.road_class });
+      a += len;
+    }
+    s0 = s1;
+  }
+  return out;
+}
+/* speed cameras along the route */
+function alongOf(R, p){
+  let best = null, bi = 0;
+  for (let i = 0; i < R.pts.length - 1; i++){ const q = projSeg(p, R.pts[i], R.pts[i+1]); if (!best || q.d < best.d){ best = q; bi = i; } }
+  return best && best.d < 45 ? R.cum[bi] + best.t * (R.cum[bi+1] - R.cum[bi]) : null;
+}
+async function fetchCams(R){
+  const step = Math.max(1, Math.ceil(R.pts.length / 250)), pl = [];
+  for (let i = 0; i < R.pts.length; i += step) pl.push(R.pts[i]);
+  pl.push(R.pts[R.pts.length - 1]);
+  const coords = pl.map(p => p[0].toFixed(5) + "," + p[1].toFixed(5)).join(",");
+  const j = await overpass(`[out:json][timeout:25];node["highway"="speed_camera"](around:35,${coords});out;`);
+  if (!j) return [];
+  return (j.elements || []).map(n => ({ lat: n.lat, lon: n.lon, max: (n.tags && n.tags.maxspeed) || "", along: alongOf(R, [n.lat, n.lon]) }))
+    .filter(c => c.along != null).sort((a, b) => a.along - b.along);
+}
+function enrichRoute(R){
+  fetchLimits(R).then(l => { R.limits = l; }).catch(() => {});
+  fetchCams(R).then(c => { R.cams = c; if (R === currentRoute && !nav.on) $("cardNote").textContent = noteFor(R); }).catch(() => {});
+}
+
+let currentRoute = null;
 const fmtClock = d => d.toLocaleTimeString("en-GB", { hour:"2-digit", minute:"2-digit" });
-
+const fmtDur = s => { const m = Math.round(s/60); return m < 60 ? m + " min" : Math.floor(m/60) + "h " + String(m%60).padStart(2,"0"); };
+function noteFor(R){
+  const bits = [];
+  if (vehicle().weightT > 18 && (llcsActive(new Date()) || llcsActive(new Date(Date.now() + R.time*1000))))
+    bits.push("London Lorry Control is in force on this trip if you're inside Greater London.");
+  if (R.cams && R.cams.length) bits.push(R.cams.length + " speed camera" + (R.cams.length > 1 ? "s" : "") + " on route.");
+  bits.push("Times use HGV speeds, not live traffic.");
+  return bits.join(" ");
+}
+function fitRoute(R){
+  let w = 180, e = -180, s = 90, n = -90;
+  R.pts.forEach(p => { if (p[1] < w) w = p[1]; if (p[1] > e) e = p[1]; if (p[0] < s) s = p[0]; if (p[0] > n) n = p[0]; });
+  map.jumpTo({ bearing: 0, pitch: 0 });
+  map.fitBounds([[w, s], [e, n]], { padding: { top: 90, bottom: 230, left: 40, right: 70 }, maxZoom: 16, duration: 800 });
+}
+function showRouteCard(R){
+  const eta = new Date(Date.now() + R.time*1000);
+  $("sTime").textContent = fmtDur(R.time);
+  $("sDist").textContent = (R.len/1609.34).toFixed(1);
+  $("sEta").textContent = fmtClock(eta);
+  $("cardNote").textContent = noteFor(R);
+  document.body.classList.add("has-route"); $("routeCard").hidden = false;
+}
+let destMarker = null;
+function placeDest(to){
+  if (destMarker) destMarker.remove();
+  destMarker = to ? new maplibregl.Marker({ element: elFrom('<div class="dest"></div>') }).setLngLat([to[1], to[0]]).addTo(map) : null;
+}
 async function planRoute(){
-  const st = $("routeStatus"); $("summary").hidden = true; $("startNav").hidden = true; $("demoNav").hidden = true;
-  layers.route.clearLayers(); currentRoute = null;
+  const st = $("routeStatus");
   if (!$("to").value.trim()){ st.textContent = "Enter a destination postcode."; return; }
   try{
     st.textContent = "Finding postcodes…";
     let from;
     if ($("from").value.trim()) from = await postcode($("from").value);
     else if (myPos) from = myPos;
-    else { st.textContent = "Tap ◎ to share your location, or enter a From postcode."; return; }
+    else { startWatch(false); st.textContent = "Allow location, or enter a From postcode."; return; }
     const to = await postcode($("to").value);
     st.textContent = "Planning a truck route…";
     const R = await fetchRoute(from, to);
-    currentRoute = R;
-    const line = drawRoute(R);
-    map.fitBounds(line.getBounds(), { padding:[40,40] });
-    const mins = Math.round(R.time/60), eta = new Date(Date.now() + R.time*1000);
-    $("sDist").textContent = (R.len/1609.34).toFixed(1);
-    $("sTime").textContent = Math.floor(mins/60) + "h " + String(mins%60).padStart(2,"0");
-    $("sEta").textContent = fmtClock(eta);
-    $("summary").hidden = false; $("startNav").hidden = false; $("demoNav").hidden = false;
-    const warn = (vehicle().weightT > 18 && (llcsActive(new Date()) || llcsActive(eta))) ? " London Lorry Control is in force on this trip if you're inside Greater London. Check your route is approved." : "";
-    st.textContent = "Truck route for your size and weight. Tap Start for voice directions." + warn;
+    currentRoute = R; st.textContent = "";
+    setRouteLine(R.pts); placeDest(R.to);
+    $("to").blur(); $("from").blur();
+    showRouteCard(R); fitRoute(R);
   }catch(e){ st.textContent = e.message || "Something went wrong planning the route."; }
 }
 $("go").addEventListener("click", planRoute);
+$("to").addEventListener("keydown", e => { if (e.key === "Enter") planRoute(); });
 $("clearRoute").addEventListener("click", () => {
-  layers.route.clearLayers(); currentRoute = null;
-  $("summary").hidden = true; $("startNav").hidden = true; $("demoNav").hidden = true; $("routeStatus").textContent = "";
+  currentRoute = null; setRouteLine(null); placeDest(null);
+  document.body.classList.remove("has-route"); $("routeCard").hidden = true;
 });
 
 /* ---------- Turn-by-turn navigation ---------- */
-var nav = { on:false, watch:null, sim:null, route:null, seg:0, along:0, offCount:0, lastReroute:0, rerouting:false,
-  follow:true, muted: store.get("muted", false), spoken:{}, lastK:-1, wake:null, speed:0, me:null };
+var nav = { on:false, sim:null, route:null, seg:0, along:0, offCount:0, lastReroute:0, rerouting:false,
+  follow:true, headingUp: store.get("headingUp", true), zoom:16.5, lastHdg:0,
+  muted: store.get("muted", false), spoken:{}, lastK:-1, wake:null, speed:0, limIdx:0 };
 
 function speak(text){
   if (!text || nav.muted || !("speechSynthesis" in window)) return;
@@ -555,7 +767,6 @@ function shortDist(m){
   if (mi >= 0.25) return (mi < 10 ? mi.toFixed(1) : Math.round(mi)) + " mi";
   return (Math.round(m * 1.0936 / 10) * 10) + " yd";
 }
-
 const TURN_ANGLE = { 1:0, 2:90, 3:-90, 7:0, 8:0, 9:45, 10:90, 11:135, 12:180, 13:-180, 14:-135, 15:-90, 16:-45,
   17:0, 18:45, 19:-45, 20:45, 21:-45, 22:0, 23:30, 24:-30, 25:0, 37:30, 38:-30 };
 function iconFor(type){
@@ -566,24 +777,36 @@ function iconFor(type){
   const a = TURN_ANGLE[type] || 0;
   return `<svg viewBox="0 0 48 48"><g transform="rotate(${a} 24 26)"><path d="M24 4l13 15h-8.5v25h-9V19H11z" fill="currentColor"/></g></svg>`;
 }
-const ME_SVG = '<svg viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#fff"/><path d="M22 7l11 28-11-6-11 6z" fill="#0a84ff"/></svg>';
-
+const shapeAt = i => nav.route.cum[Math.min(i, nav.route.cum.length - 1)];
 function nextManIdx(){
   const R = nav.route;
-  for (let k = 1; k < R.man.length; k++){
-    if (R.cum[Math.min(R.man[k].begin_shape_index, R.cum.length-1)] > nav.along + 8) return k;
-  }
+  for (let k = 1; k < R.man.length; k++) if (shapeAt(R.man[k].begin_shape_index) > nav.along + 8) return k;
   return R.man.length - 1;
 }
-function manDist(k){
-  const R = nav.route, m = R.man[k];
-  return Math.max(0, R.cum[Math.min(m.begin_shape_index, R.cum.length-1)] - nav.along);
-}
-function stripDot(t){ return (t || "").replace(/\.$/, ""); }
+const manDist = k => Math.max(0, shapeAt(nav.route.man[k].begin_shape_index) - nav.along);
+const stripDot = t => (t || "").replace(/\.$/, "");
 
+function limitHere(){
+  const L = nav.route.limits; if (!L || !L.length) return null;
+  let i = Math.min(nav.limIdx, L.length - 1);
+  while (i > 0 && L[i].from > nav.along) i--;
+  while (i < L.length - 1 && L[i].to < nav.along) i++;
+  nav.limIdx = i;
+  return (L[i].from <= nav.along + 5 && L[i].to >= nav.along - 5) ? L[i] : null;
+}
+function updateSpeed(){
+  const mph = Math.round(nav.speed * 2.23694);
+  $("curSpd").textContent = mph;
+  const L = limitHere();
+  if (L && L.posted){
+    const cap = hgvLimit(L.posted, L.rc);
+    $("limSign").hidden = false; $("limNum").textContent = L.posted;
+    if (cap && cap < L.posted){ $("hgvCap").hidden = false; $("hgvCap").textContent = "HGV " + cap; } else $("hgvCap").hidden = true;
+    $("spdBox").classList.toggle("over", !!cap && mph > cap + 2);
+  } else { $("limSign").hidden = true; $("spdBox").classList.remove("over"); }
+}
 function updateBanner(){
-  const R = nav.route; if (!R || !R.man.length) return;
-  if (nav.rerouting) return;
+  const R = nav.route; if (!R || !R.man.length || nav.rerouting) return;
   const k = nextManIdx(), m = R.man[k], d = manDist(k);
   $("navIcon").innerHTML = iconFor(m.type);
   $("navDist").textContent = shortDist(d);
@@ -595,27 +818,33 @@ function updateBanner(){
   $("nMiles").textContent = (remain/1609.34).toFixed(remain < 16093 ? 1 : 0);
   $("nMins").textContent = Math.max(0, Math.round(remT/60));
   $("nEta").textContent = fmtClock(new Date(Date.now() + remT*1000));
+  // speed camera ahead
+  const warnAt = nav.speed > 18 ? 800 : 400;
+  const cam = (R.cams || []).find(c => c.along > nav.along - 15);
+  const cd = cam ? cam.along - nav.along : Infinity;
+  if (cam && cd < warnAt){
+    $("camChip").hidden = false;
+    $("camChip").innerHTML = '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="15" height="10" rx="2" fill="#111"/><path d="M17 10l5-3v10l-5-3z" fill="#111"/><circle cx="9.5" cy="12" r="3" fill="#ffd60a"/></svg>Speed camera ' +
+      (cd > 15 ? shortDist(cd) : "now") + (cam.max ? " · " + esc(cam.max) : "");
+    const key = "cam" + Math.round(cam.along);
+    if (!nav.spoken[key]){ nav.spoken[key] = true; if (!(window.speechSynthesis && speechSynthesis.speaking)) speak("Speed camera ahead."); }
+  } else $("camChip").hidden = true;
 }
-
 function checkVoice(){
   const R = nav.route, k = nextManIdx(), m = R.man[k], d = manDist(k);
-  const arrival = m.type === 4 || m.type === 5 || m.type === 6;
-  if (arrival){
+  if (m.type === 4 || m.type === 5 || m.type === 6){
     if (d < 40){ speak("You have arrived at your destination."); endNav(true); return; }
-    const alertAtA = nav.speed > 18 ? 1100 : 450;
-    if (d < alertAtA && d > 150 && !nav.spoken[k + "a"]){ nav.spoken[k + "a"] = true; speak("In " + spokenDist(d) + ", you will arrive at your destination."); }
-    if (k !== nav.lastK) nav.lastK = k;
-    return;
+    const a = nav.speed > 18 ? 1100 : 450;
+    if (d < a && d > 150 && !nav.spoken[k + "a"]){ nav.spoken[k + "a"] = true; speak("In " + spokenDist(d) + ", you will arrive at your destination."); }
+    nav.lastK = k; return;
   }
-  // after passing a junction, say how long to keep going
   if (k !== nav.lastK){
     const passed = R.man[k-1];
     if (nav.lastK !== -1 && passed && passed.verbal_post_transition_instruction && d > 1600)
       setTimeout(() => { if (nav.on && !speechSynthesis.speaking) speak(passed.verbal_post_transition_instruction); }, 3500);
     nav.lastK = k;
   }
-  const preAt = Math.max(70, nav.speed * 9);        // about 9 seconds before the turn
-  const alertAt = nav.speed > 18 ? 1100 : 450;       // half a mile at motorway speed, quarter mile in town
+  const preAt = Math.max(70, nav.speed * 9), alertAt = nav.speed > 18 ? 1100 : 450;
   if (d < preAt && !nav.spoken[k + "p"]){
     nav.spoken[k + "p"] = nav.spoken[k + "a"] = true;
     speak(m.verbal_pre_transition_instruction || m.instruction);
@@ -624,25 +853,19 @@ function checkVoice(){
     speak("In " + spokenDist(d) + ", " + lcFirst(m.verbal_transition_alert_instruction || m.instruction));
   }
 }
-
-function placeMe(here, hdg){
-  if (!nav.me){
-    nav.me = L.marker(here, { icon: L.divIcon({ className:"", html:'<div class="me">' + ME_SVG + '</div>', iconSize:[44,44], iconAnchor:[22,22] }),
-      interactive:false, zIndexOffset:3000 }).addTo(layers.me);
-  } else nav.me.setLatLng(here);
-  const el = nav.me.getElement && nav.me.getElement();
-  const inner = el && el.querySelector && el.querySelector(".me");
-  if (inner && inner.style) inner.style.transform = "rotate(" + Math.round(hdg) + "deg)";
-}
-function followMe(here){
+function followMe(here, hdg, now){
   if (!nav.follow) return;
-  const z = Math.max(map.getZoom(), 16);
-  // keep the truck in the lower part of the screen so you see more road ahead
-  const pt = map.project(here, z).add([0, -map.getSize().y * 0.22]);
-  map.setView(map.unproject(pt, z), z, { animate:true, duration:0.8 });
+  const h = map.getContainer().clientHeight;
+  map.easeTo({ center: [here[1], here[0]], zoom: nav.zoom, bearing: nav.headingUp ? hdg : 0, pitch: nav.headingUp ? 45 : 0,
+    offset: [0, h * 0.2], duration: now ? 400 : 950, easing: t => t });
 }
+function userMoved(e){
+  if (!nav.on || !e.originalEvent) return;    // only a finger on the map counts, not our own camera moves
+  nav.follow = false; $("recenter").hidden = false;
+}
+["dragstart", "rotatestart", "pitchstart", "zoomstart"].forEach(ev => map.on(ev, userMoved));
 
-function onFix(p){
+function navFix(p){
   if (!nav.on) return;
   const here = [p.coords.latitude, p.coords.longitude]; myPos = here;
   if (p.coords.speed != null && p.coords.speed >= 0) nav.speed = p.coords.speed;
@@ -656,20 +879,20 @@ function onFix(p){
   if (best.d <= tol){
     nav.offCount = 0; nav.seg = bi;
     nav.along = R.cum[bi] + best.t * (R.cum[bi+1] - R.cum[bi]);
-    const rest = [best.pt].concat(pts.slice(bi + 1));
-    routeLine.setLatLngs(rest); routeCasing.setLatLngs(rest);
+    setRouteLine([best.pt].concat(pts.slice(bi + 1)));
     if (hdg == null || isNaN(hdg) || nav.speed < 1.5) hdg = bearing(pts[bi], pts[bi+1]);
   } else {
     nav.offCount++;
     if (nav.offCount >= 3) reroute(here);
+    if (hdg == null || isNaN(hdg)) hdg = nav.lastHdg;
   }
-  placeMe(here, hdg || 0);
-  followMe(here);
+  nav.lastHdg = hdg;
+  placeMe(here, hdg, true);
+  followMe(here, hdg);
+  updateSpeed();
   checkVoice();
   if (nav.on) updateBanner();
 }
-function onFixErr(){ if (nav.on && !nav.sim){ $("navText").textContent = "Waiting for GPS… allow location for this site in Settings → Safari → Location."; } }
-
 async function reroute(here){
   if (nav.rerouting || nav.sim || Date.now() - nav.lastReroute < 15000) return;
   nav.rerouting = true; nav.lastReroute = Date.now();
@@ -677,54 +900,50 @@ async function reroute(here){
   speak("Rerouting.");
   try{
     const R = await fetchRoute(here, nav.route.to);
-    nav.route = currentRoute = R; nav.seg = 0; nav.along = 0; nav.offCount = 0; nav.spoken = {}; nav.lastK = -1;
-    drawRoute(R);
+    nav.route = currentRoute = R; Object.assign(nav, { seg:0, along:0, offCount:0, spoken:{}, lastK:-1, limIdx:0 });
+    setRouteLine(R.pts);
   }catch(e){ $("navText").textContent = "Couldn't reroute. Trying again shortly."; }
   nav.rerouting = false; updateBanner();
 }
-
 async function startNav(demo){
   if (!currentRoute) return;
-  Object.assign(nav, { on:true, route:currentRoute, seg:0, along:0, offCount:0, spoken:{}, lastK:-1, follow:true, speed:0 });
-  drawRoute(currentRoute);
+  Object.assign(nav, { on:true, route:currentRoute, seg:0, along:0, offCount:0, spoken:{}, lastK:-1, follow:true, speed:0, zoom:16.5, limIdx:0 });
+  setRouteLine(currentRoute.pts);
   document.body.classList.add("navigating");
-  $("navTop").hidden = false; $("navBottom").hidden = false; $("recenter").hidden = true;
+  $("routeCard").hidden = true; $("navTop").hidden = false; $("navBottom").hidden = false; $("speedBox").hidden = false; $("recenter").hidden = true;
   $("navMute").textContent = nav.muted ? "Muted" : "Voice on";
   updateBanner();
-  // first words must be spoken inside the tap, or iPhones block the voice
+  // the first words must be spoken inside the tap, or iPhones block the voice
   const first = currentRoute.man[0];
   speak(first ? (first.verbal_pre_transition_instruction || first.instruction) : "Starting route.");
   nav.spoken["0p"] = true;
-  map.setZoom(17);
+  const p0 = currentRoute.pts[0], h0 = currentRoute.pts[1] ? bearing(p0, currentRoute.pts[1]) : 0;
+  const s0 = (demo || !myPos) ? p0 : myPos;
+  nav.lastHdg = h0; placeMe(s0, h0, true); followMe(s0, h0, true);
   if (demo){
     let along = 0; const v = 15;                       // about 34 mph
     nav.sim = setInterval(() => {
-      along += v;
+      along = Math.min(nav.route.len, along + v);
       const R = nav.route, cum = R.cum;
-      if (along >= R.len) along = R.len;
       let i = 0; while (i < cum.length - 2 && cum[i+1] < along) i++;
       const t = cum[i+1] > cum[i] ? (along - cum[i]) / (cum[i+1] - cum[i]) : 0;
       const a = R.pts[i], b = R.pts[i+1];
-      onFix({ coords:{ latitude: a[0] + t*(b[0]-a[0]), longitude: a[1] + t*(b[1]-a[1]), speed: v, heading: bearing(a, b), accuracy: 5 } });
+      navFix({ coords:{ latitude: a[0] + t*(b[0]-a[0]), longitude: a[1] + t*(b[1]-a[1]), speed: v, heading: bearing(a, b), accuracy: 5 } });
     }, 1000);
-  } else {
-    if (!navigator.geolocation){ $("navText").textContent = "This phone isn't sharing its location."; return; }
-    nav.watch = navigator.geolocation.watchPosition(onFix, onFixErr, { enableHighAccuracy:true, maximumAge:1000, timeout:20000 });
-  }
+  } else startWatch(false);
   try{ if (navigator.wakeLock) nav.wake = await navigator.wakeLock.request("screen"); }catch(e){}
 }
 function endNav(arrived){
   nav.on = false;
-  if (nav.watch != null) navigator.geolocation.clearWatch(nav.watch);
-  if (nav.sim) clearInterval(nav.sim);
-  nav.watch = null; nav.sim = null;
+  if (nav.sim) clearInterval(nav.sim); nav.sim = null;
   try{ if (nav.wake) nav.wake.release(); }catch(e){} nav.wake = null;
   if (!arrived && "speechSynthesis" in window) speechSynthesis.cancel();
   document.body.classList.remove("navigating");
-  $("navTop").hidden = true; $("navBottom").hidden = true; $("recenter").hidden = true;
-  if (nav.me){ layers.me.removeLayer(nav.me); nav.me = null; }
-  if (currentRoute) drawRoute(currentRoute);
-  $("routeStatus").textContent = arrived ? "You've arrived." : "Navigation ended.";
+  ["navTop","navBottom","speedBox","recenter"].forEach(id => $(id).hidden = true);
+  if (myPos) placeMe(myPos, 0, false); else if (meMarker){ meMarker.remove(); meMarker = null; meMode = ""; }
+  if (currentRoute && !arrived){ setRouteLine(currentRoute.pts); showRouteCard(currentRoute); fitRoute(currentRoute); }
+  else { currentRoute = null; setRouteLine(null); placeDest(null); document.body.classList.remove("has-route"); $("routeCard").hidden = true;
+         map.easeTo({ pitch: 0, bearing: 0, duration: 600 }); }
 }
 $("startNav").addEventListener("click", () => startNav(false));
 $("demoNav").addEventListener("click", () => startNav(true));
@@ -734,25 +953,27 @@ $("navMute").addEventListener("click", () => {
   $("navMute").textContent = nav.muted ? "Muted" : "Voice on";
   if (nav.muted && "speechSynthesis" in window) speechSynthesis.cancel(); else speak("Voice on.");
 });
-map.on("dragstart", () => { if (nav.on){ nav.follow = false; $("recenter").hidden = false; } });
-$("recenter").addEventListener("click", () => { nav.follow = true; $("recenter").hidden = true; if (myPos) followMe(myPos); });
+$("recenter").addEventListener("click", () => {
+  nav.follow = true; nav.zoom = Math.min(19, Math.max(12, map.getZoom())); $("recenter").hidden = true;
+  if (myPos) followMe(myPos, nav.lastHdg, true);
+});
 document.addEventListener("visibilitychange", async () => {
   if (nav.on && document.visibilityState === "visible" && navigator.wakeLock){ try{ nav.wake = await navigator.wakeLock.request("screen"); }catch(e){} }
 });
 
 /* ---------- Sheet & tabs ---------- */
-$("toggle").addEventListener("click", () => {
-  const c = $("sheet").classList.toggle("collapsed");
-  $("toggle").textContent = c ? "Open" : "Close"; $("toggle").setAttribute("aria-expanded", String(!c));
-});
+function setSheet(open){
+  $("sheet").classList.toggle("collapsed", !open);
+  $("toggle").textContent = open ? "Close" : "Open"; $("toggle").setAttribute("aria-expanded", String(open));
+}
+$("toggle").addEventListener("click", () => setSheet($("sheet").classList.contains("collapsed")));
 document.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => {
   document.querySelectorAll("[data-tab]").forEach(x => x.setAttribute("aria-selected", String(x === b)));
   document.querySelectorAll("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== b.dataset.tab);
 }));
 
-setTimeout(() => map.invalidateSize(), 300);
-window.addEventListener("resize", () => map.invalidateSize());
-locate(false); loadArea();
+map.on("load", () => { loadArea(); });
+startWatch(false);
 </script>
 </body>
 </html>
