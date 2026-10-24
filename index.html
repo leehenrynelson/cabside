@@ -68,6 +68,32 @@ input,select{font:16px var(--body);padding:10px;border-radius:8px;border:1px sol
 .leaflet-popup-content{font:14px/1.4 var(--body)}
 .leaflet-popup-content h3{font:700 16px/1.1 var(--display);text-transform:uppercase;margin:0 0 4px}
 [hidden]{display:none!important}
+/* ---------- turn-by-turn ---------- */
+#startNav{background:#0a84ff;color:#fff}
+#demoNav{background:transparent;color:#0a84ff;border:1px solid #0a84ff}
+body.navigating .top, body.navigating .fab, body.navigating .sheet{display:none}
+.navtop{position:fixed;top:0;left:0;right:0;z-index:700;display:flex;gap:14px;align-items:center;background:#16191d;color:#fff;
+  padding:calc(env(safe-area-inset-top,0px) + 14px) max(16px,env(safe-area-inset-right,0px)) 16px max(16px,env(safe-area-inset-left,0px));
+  border-radius:0 0 18px 18px;box-shadow:0 6px 20px rgba(0,0,0,.35)}
+.navicon{width:62px;height:62px;flex:none;color:#fff}
+.navicon svg{width:100%;height:100%;display:block}
+.navmain{min-width:0;flex:1}
+.navdist{font:700 40px/1 var(--display);font-variant-numeric:tabular-nums}
+.navtext{font:700 19px/1.25 var(--body);margin-top:4px;overflow-wrap:anywhere}
+.navthen{font-size:14px;color:#b9c2cb;margin-top:6px}
+.navbottom{position:fixed;left:0;right:0;bottom:0;z-index:700;background:var(--panel);display:flex;align-items:center;gap:10px;
+  border-radius:18px 18px 0 0;box-shadow:0 -6px 20px rgba(0,0,0,.25);
+  padding:14px max(16px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 14px) max(16px,env(safe-area-inset-left,0px))}
+.navstats{flex:1;display:flex;justify-content:center;gap:16px;text-align:center;font-variant-numeric:tabular-nums;min-width:0}
+.navstats strong{display:block;font:700 26px/1 var(--display)}
+.navstats span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+#nEta{color:var(--go)}
+.endbtn{background:#d70015;color:#fff;padding:14px 18px}
+.mutebtn{padding:12px 10px;min-width:64px}
+.recenter{position:fixed;z-index:700;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 104px);
+  background:#0a84ff;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.3)}
+.me{width:44px;height:44px;transition:transform .4s ease}
+.me svg{width:100%;height:100%;display:block;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4))}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -75,7 +101,7 @@ input,select{font:16px var(--body);padding:10px;border-radius:8px;border:1px sol
 <div id="map" role="application" aria-label="Map"></div>
 
 <header class="top">
-  <div class="brand"><b>HGV</b>Cabside <small style="font-size:12px;letter-spacing:.05em;color:var(--muted)">v6</small></div>
+  <div class="brand"><b>HGV</b>Cabside <small style="font-size:12px;letter-spacing:.05em;color:var(--muted)">v7</small></div>
   <span id="llcs" class="pill" title="London Lorry Control Scheme">LLCS…</span>
   <span class="spacer"></span>
   <span id="loadMsg" class="hint" style="margin:0"></span>
@@ -118,6 +144,8 @@ input,select{font:16px var(--body);padding:10px;border-radius:8px;border:1px sol
       <p class="hint">Plans a truck route for the height, width, length and weight in Vehicle. Drive time uses the 56 mph limiter. No sign-up needed.</p>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
         <button id="go">Plan HGV route</button>
+        <button id="startNav" hidden>Start</button>
+        <button id="demoNav" hidden>Demo drive</button>
         <button id="clearRoute" class="ghost">Clear</button>
       </div>
       <div id="routeStatus" class="status"></div>
@@ -143,6 +171,25 @@ input,select{font:16px var(--body);padding:10px;border-radius:8px;border:1px sol
     </div>
   </div>
 </section>
+
+<div id="navTop" class="navtop" hidden aria-live="polite">
+  <div class="navicon" id="navIcon"></div>
+  <div class="navmain">
+    <div class="navdist" id="navDist">–</div>
+    <div class="navtext" id="navText">Starting…</div>
+    <div class="navthen" id="navThen" hidden></div>
+  </div>
+</div>
+<div id="navBottom" class="navbottom" hidden>
+  <button id="navMute" class="ghost mutebtn">Voice on</button>
+  <div class="navstats">
+    <div><strong id="nEta">–</strong><span>Arrival</span></div>
+    <div><strong id="nMins">–</strong><span>Min</span></div>
+    <div><strong id="nMiles">–</strong><span>Miles</span></div>
+  </div>
+  <button id="navEnd" class="endbtn">End</button>
+</div>
+<button id="recenter" class="recenter" hidden>Re-centre</button>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
@@ -263,6 +310,7 @@ async function loadArea(){
     nwr["parking_space"~"loading|delivery"](${bbox});
     nwr["parking"]["access"="delivery"](${bbox});
   );out tags center geom qt 2500;`;
+  { const c = map.getCenter(); lastLoad = [c.lat, c.lng]; }
   $("loadMsg").textContent = "Loading restrictions…";
   for (const url of OVERPASS){
     try{
@@ -274,7 +322,12 @@ async function loadArea(){
   }
   $("loadMsg").textContent = "Couldn't load restrictions. Tap ↻ to retry.";
 }
-let loadTimer; map.on("moveend", () => { clearTimeout(loadTimer); loadTimer = setTimeout(loadArea, 600); });
+let loadTimer, lastLoad = null;
+map.on("moveend", () => {
+  const c = map.getCenter();
+  if (nav && nav.on && lastLoad && distM(lastLoad, [c.lat, c.lng]) < 1500) return; // don't hammer the server while driving
+  clearTimeout(loadTimer); loadTimer = setTimeout(loadArea, 600);
+});
 $("refresh").addEventListener("click", loadArea);
 
 function pos(el){ return el.center ? [el.center.lat, el.center.lon] : (el.lat != null ? [el.lat, el.lon] : null); }
@@ -384,8 +437,68 @@ async function postcode(pc){
   if (!r.ok) throw new Error("Postcode not found: " + pc);
   const j = await r.json(); return [j.result.latitude, j.result.longitude];
 }
+/* Geometry helpers */
+const R_EARTH = 6371000, RAD = Math.PI / 180;
+function distM(a, b){
+  const x = (b[1]-a[1]) * RAD * Math.cos((a[0]+b[0]) / 2 * RAD), y = (b[0]-a[0]) * RAD;
+  return Math.sqrt(x*x + y*y) * R_EARTH;
+}
+function projSeg(p, a, b){
+  const k = Math.cos(p[0] * RAD);
+  const ax = (a[1]-p[1])*k, ay = a[0]-p[0], bx = (b[1]-p[1])*k, by = b[0]-p[0];
+  const dx = bx-ax, dy = by-ay, len2 = dx*dx + dy*dy;
+  let t = len2 ? -(ax*dx + ay*dy) / len2 : 0; t = Math.max(0, Math.min(1, t));
+  const qx = ax + t*dx, qy = ay + t*dy;
+  return { t, d: Math.sqrt(qx*qx + qy*qy) * RAD * R_EARTH, pt: [a[0] + t*(b[0]-a[0]), a[1] + t*(b[1]-a[1])] };
+}
+function bearing(a, b){
+  const y = Math.sin((b[1]-a[1])*RAD) * Math.cos(b[0]*RAD);
+  const x = Math.cos(a[0]*RAD)*Math.sin(b[0]*RAD) - Math.sin(a[0]*RAD)*Math.cos(b[0]*RAD)*Math.cos((b[1]-a[1])*RAD);
+  return (Math.atan2(y, x) / RAD + 360) % 360;
+}
+
+/* Valhalla truck routing (FOSSGIS public server, free, no key) */
+async function callValhalla(body){
+  try{
+    return await fetch("https://valhalla1.openstreetmap.de/route", {
+      method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
+    });
+  }catch(e){ throw new Error("Couldn't reach the routing service. Check your signal and try again."); }
+}
+async function fetchRoute(from, to){
+  const v = vehicle();
+  const base = {
+    locations: [{ lat: from[0], lon: from[1] }, { lat: to[0], lon: to[1] }],
+    costing: "truck",
+    costing_options: { truck: {
+      height: +v.heightM.toFixed(2), width: v.widthM, length: v.lengthM,
+      weight: v.weightT, axle_load: v.axleT, top_speed: 90
+    } },
+    units: "miles"
+  };
+  let r = await callValhalla(Object.assign({ language: "en-GB" }, base));
+  if (r.status === 400) r = await callValhalla(base);          // fall back if en-GB voice text isn't offered
+  if (r.status === 429) throw new Error("The free routing service is busy. Wait a minute and try again.");
+  if (!r.ok) throw new Error("No truck route found for your size and weight between these places.");
+  const j = await r.json(), leg = j.trip.legs[0];
+  const pts = decodePolyline6(leg.shape), cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i-1] + distM(pts[i-1], pts[i]));
+  return { pts, cum, man: leg.maneuvers || [], time: j.trip.summary.time, len: cum[cum.length-1], to };
+}
+
+let currentRoute = null, routeCasing = null, routeLine = null;
+function drawRoute(R){
+  layers.route.clearLayers();
+  routeCasing = L.polyline(R.pts, { color:"#0b4fa8", weight:12, opacity:1, lineCap:"round", lineJoin:"round" }).addTo(layers.route);
+  routeLine = L.polyline(R.pts, { color:"#0a84ff", weight:8, opacity:1, lineCap:"round", lineJoin:"round" }).addTo(layers.route);
+  L.circleMarker(R.to, { radius:9, color:"#fff", weight:3, fillColor:"#d70015", fillOpacity:1 }).addTo(layers.route);
+  return routeLine;
+}
+const fmtClock = d => d.toLocaleTimeString("en-GB", { hour:"2-digit", minute:"2-digit" });
+
 async function planRoute(){
-  const st = $("routeStatus"); $("summary").hidden = true; layers.route.clearLayers();
+  const st = $("routeStatus"); $("summary").hidden = true; $("startNav").hidden = true; $("demoNav").hidden = true;
+  layers.route.clearLayers(); currentRoute = null;
   if (!$("to").value.trim()){ st.textContent = "Enter a destination postcode."; return; }
   try{
     st.textContent = "Finding postcodes…";
@@ -394,42 +507,238 @@ async function planRoute(){
     else if (myPos) from = myPos;
     else { st.textContent = "Tap ◎ to share your location, or enter a From postcode."; return; }
     const to = await postcode($("to").value);
-    const v = vehicle();
     st.textContent = "Planning a truck route…";
-    /* Valhalla truck routing (FOSSGIS public server, free, no key) */
-    const body = {
-      locations: [{ lat: from[0], lon: from[1] }, { lat: to[0], lon: to[1] }],
-      costing: "truck",
-      costing_options: { truck: {
-        height: +v.heightM.toFixed(2), width: v.widthM, length: v.lengthM,
-        weight: v.weightT, axle_load: v.axleT, top_speed: 90
-      } },
-      units: "miles", directions_type: "none"
-    };
-    let r;
-    try{
-      r = await fetch("https://valhalla1.openstreetmap.de/route", {
-        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
-      });
-    }catch(e){ throw new Error("Couldn't reach the routing service. Check your signal and try again."); }
-    if (r.status === 429) throw new Error("The free routing service is busy. Wait a minute and try again.");
-    if (!r.ok) throw new Error("No truck route found for your size and weight between these postcodes.");
-    const j = await r.json(), s = j.trip.summary;
-    const pts = j.trip.legs.flatMap(l => decodePolyline6(l.shape));
-    const line = L.polyline(pts, { color:"#f2b705", weight:7, opacity:.95 }).addTo(layers.route);
-    L.circleMarker(to, { radius:8, color:"#111", weight:3, fillColor:"#f2b705", fillOpacity:1 }).addTo(layers.route);
+    const R = await fetchRoute(from, to);
+    currentRoute = R;
+    const line = drawRoute(R);
     map.fitBounds(line.getBounds(), { padding:[40,40] });
-    const mins = Math.round(s.time/60), eta = new Date(Date.now() + s.time*1000);
-    $("sDist").textContent = s.length.toFixed(1);
+    const mins = Math.round(R.time/60), eta = new Date(Date.now() + R.time*1000);
+    $("sDist").textContent = (R.len/1609.34).toFixed(1);
     $("sTime").textContent = Math.floor(mins/60) + "h " + String(mins%60).padStart(2,"0");
-    $("sEta").textContent = eta.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
-    $("summary").hidden = false;
-    const warn = (v.weightT > 18 && (llcsActive(new Date()) || llcsActive(eta))) ? " London Lorry Control is in force on this trip if you're inside Greater London. Check your route is approved." : "";
-    st.textContent = "Truck route for your size and weight. Time uses HGV speeds, not live traffic." + warn;
+    $("sEta").textContent = fmtClock(eta);
+    $("summary").hidden = false; $("startNav").hidden = false; $("demoNav").hidden = false;
+    const warn = (vehicle().weightT > 18 && (llcsActive(new Date()) || llcsActive(eta))) ? " London Lorry Control is in force on this trip if you're inside Greater London. Check your route is approved." : "";
+    st.textContent = "Truck route for your size and weight. Tap Start for voice directions." + warn;
   }catch(e){ st.textContent = e.message || "Something went wrong planning the route."; }
 }
 $("go").addEventListener("click", planRoute);
-$("clearRoute").addEventListener("click", () => { layers.route.clearLayers(); $("summary").hidden = true; $("routeStatus").textContent = ""; });
+$("clearRoute").addEventListener("click", () => {
+  layers.route.clearLayers(); currentRoute = null;
+  $("summary").hidden = true; $("startNav").hidden = true; $("demoNav").hidden = true; $("routeStatus").textContent = "";
+});
+
+/* ---------- Turn-by-turn navigation ---------- */
+var nav = { on:false, watch:null, sim:null, route:null, seg:0, along:0, offCount:0, lastReroute:0, rerouting:false,
+  follow:true, muted: store.get("muted", false), spoken:{}, lastK:-1, wake:null, speed:0, me:null };
+
+function speak(text){
+  if (!text || nav.muted || !("speechSynthesis" in window)) return;
+  try{
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-GB"; u.rate = 1;
+    const gb = speechSynthesis.getVoices().find(v => /en[-_]GB/i.test(v.lang));
+    if (gb) u.voice = gb;
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+  }catch(e){}
+}
+const lcFirst = t => t ? t.charAt(0).toLowerCase() + t.slice(1) : t;
+function spokenDist(m){
+  const mi = m / 1609.34;
+  if (mi >= 1.4) return Math.round(mi) + " miles";
+  if (mi >= 0.9) return "1 mile";
+  if (mi >= 0.4) return "half a mile";
+  if (mi >= 0.2) return "a quarter of a mile";
+  return (Math.round(m * 1.0936 / 50) * 50 || 50) + " yards";
+}
+function shortDist(m){
+  const mi = m / 1609.34;
+  if (mi >= 0.25) return (mi < 10 ? mi.toFixed(1) : Math.round(mi)) + " mi";
+  return (Math.round(m * 1.0936 / 10) * 10) + " yd";
+}
+
+const TURN_ANGLE = { 1:0, 2:90, 3:-90, 7:0, 8:0, 9:45, 10:90, 11:135, 12:180, 13:-180, 14:-135, 15:-90, 16:-45,
+  17:0, 18:45, 19:-45, 20:45, 21:-45, 22:0, 23:30, 24:-30, 25:0, 37:30, 38:-30 };
+function iconFor(type){
+  if (type === 4 || type === 5 || type === 6)
+    return '<svg viewBox="0 0 48 48"><path d="M13 44V5h23l-5 8.5 5 8.5H18v22z" fill="currentColor"/></svg>';
+  if (type === 26 || type === 27)
+    return '<svg viewBox="0 0 48 48"><circle cx="24" cy="28" r="10" fill="none" stroke="currentColor" stroke-width="5"/><path d="M24 3l9 11H15z" fill="currentColor"/><rect x="21.5" y="12" width="5" height="7" fill="currentColor"/></svg>';
+  const a = TURN_ANGLE[type] || 0;
+  return `<svg viewBox="0 0 48 48"><g transform="rotate(${a} 24 26)"><path d="M24 4l13 15h-8.5v25h-9V19H11z" fill="currentColor"/></g></svg>`;
+}
+const ME_SVG = '<svg viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#fff"/><path d="M22 7l11 28-11-6-11 6z" fill="#0a84ff"/></svg>';
+
+function nextManIdx(){
+  const R = nav.route;
+  for (let k = 1; k < R.man.length; k++){
+    if (R.cum[Math.min(R.man[k].begin_shape_index, R.cum.length-1)] > nav.along + 8) return k;
+  }
+  return R.man.length - 1;
+}
+function manDist(k){
+  const R = nav.route, m = R.man[k];
+  return Math.max(0, R.cum[Math.min(m.begin_shape_index, R.cum.length-1)] - nav.along);
+}
+function stripDot(t){ return (t || "").replace(/\.$/, ""); }
+
+function updateBanner(){
+  const R = nav.route; if (!R || !R.man.length) return;
+  if (nav.rerouting) return;
+  const k = nextManIdx(), m = R.man[k], d = manDist(k);
+  $("navIcon").innerHTML = iconFor(m.type);
+  $("navDist").textContent = shortDist(d);
+  $("navText").textContent = stripDot(m.instruction);
+  const n = R.man[k+1];
+  if (n && (manDist(k+1) - d) < 250){ $("navThen").hidden = false; $("navThen").textContent = "Then " + lcFirst(stripDot(n.instruction)); }
+  else $("navThen").hidden = true;
+  const remain = Math.max(0, R.len - nav.along), remT = R.len ? R.time * remain / R.len : 0;
+  $("nMiles").textContent = (remain/1609.34).toFixed(remain < 16093 ? 1 : 0);
+  $("nMins").textContent = Math.max(0, Math.round(remT/60));
+  $("nEta").textContent = fmtClock(new Date(Date.now() + remT*1000));
+}
+
+function checkVoice(){
+  const R = nav.route, k = nextManIdx(), m = R.man[k], d = manDist(k);
+  const arrival = m.type === 4 || m.type === 5 || m.type === 6;
+  if (arrival){
+    if (d < 40){ speak("You have arrived at your destination."); endNav(true); return; }
+    const alertAtA = nav.speed > 18 ? 1100 : 450;
+    if (d < alertAtA && d > 150 && !nav.spoken[k + "a"]){ nav.spoken[k + "a"] = true; speak("In " + spokenDist(d) + ", you will arrive at your destination."); }
+    if (k !== nav.lastK) nav.lastK = k;
+    return;
+  }
+  // after passing a junction, say how long to keep going
+  if (k !== nav.lastK){
+    const passed = R.man[k-1];
+    if (nav.lastK !== -1 && passed && passed.verbal_post_transition_instruction && d > 1600)
+      setTimeout(() => { if (nav.on && !speechSynthesis.speaking) speak(passed.verbal_post_transition_instruction); }, 3500);
+    nav.lastK = k;
+  }
+  const preAt = Math.max(70, nav.speed * 9);        // about 9 seconds before the turn
+  const alertAt = nav.speed > 18 ? 1100 : 450;       // half a mile at motorway speed, quarter mile in town
+  if (d < preAt && !nav.spoken[k + "p"]){
+    nav.spoken[k + "p"] = nav.spoken[k + "a"] = true;
+    speak(m.verbal_pre_transition_instruction || m.instruction);
+  } else if (d < alertAt && d > preAt + 150 && !nav.spoken[k + "a"]){
+    nav.spoken[k + "a"] = true;
+    speak("In " + spokenDist(d) + ", " + lcFirst(m.verbal_transition_alert_instruction || m.instruction));
+  }
+}
+
+function placeMe(here, hdg){
+  if (!nav.me){
+    nav.me = L.marker(here, { icon: L.divIcon({ className:"", html:'<div class="me">' + ME_SVG + '</div>', iconSize:[44,44], iconAnchor:[22,22] }),
+      interactive:false, zIndexOffset:3000 }).addTo(layers.me);
+  } else nav.me.setLatLng(here);
+  const el = nav.me.getElement && nav.me.getElement();
+  const inner = el && el.querySelector && el.querySelector(".me");
+  if (inner && inner.style) inner.style.transform = "rotate(" + Math.round(hdg) + "deg)";
+}
+function followMe(here){
+  if (!nav.follow) return;
+  const z = Math.max(map.getZoom(), 16);
+  // keep the truck in the lower part of the screen so you see more road ahead
+  const pt = map.project(here, z).add([0, -map.getSize().y * 0.22]);
+  map.setView(map.unproject(pt, z), z, { animate:true, duration:0.8 });
+}
+
+function onFix(p){
+  if (!nav.on) return;
+  const here = [p.coords.latitude, p.coords.longitude]; myPos = here;
+  if (p.coords.speed != null && p.coords.speed >= 0) nav.speed = p.coords.speed;
+  const R = nav.route, pts = R.pts;
+  let best = null, bi = nav.seg;
+  const scan = (lo, hi) => { for (let i = lo; i <= hi; i++){ const q = projSeg(here, pts[i], pts[i+1]); if (!best || q.d < best.d){ best = q; bi = i; } } };
+  scan(Math.max(0, nav.seg - 3), Math.min(pts.length - 2, nav.seg + 300));
+  if (best.d > 60) scan(0, pts.length - 2);
+  const tol = Math.max(45, Math.min(100, (p.coords.accuracy || 20) * 1.5));
+  let hdg = p.coords.heading;
+  if (best.d <= tol){
+    nav.offCount = 0; nav.seg = bi;
+    nav.along = R.cum[bi] + best.t * (R.cum[bi+1] - R.cum[bi]);
+    const rest = [best.pt].concat(pts.slice(bi + 1));
+    routeLine.setLatLngs(rest); routeCasing.setLatLngs(rest);
+    if (hdg == null || isNaN(hdg) || nav.speed < 1.5) hdg = bearing(pts[bi], pts[bi+1]);
+  } else {
+    nav.offCount++;
+    if (nav.offCount >= 3) reroute(here);
+  }
+  placeMe(here, hdg || 0);
+  followMe(here);
+  checkVoice();
+  if (nav.on) updateBanner();
+}
+function onFixErr(){ if (nav.on && !nav.sim){ $("navText").textContent = "Waiting for GPS… allow location for this site in Settings → Safari → Location."; } }
+
+async function reroute(here){
+  if (nav.rerouting || nav.sim || Date.now() - nav.lastReroute < 15000) return;
+  nav.rerouting = true; nav.lastReroute = Date.now();
+  $("navDist").textContent = ""; $("navText").textContent = "Rerouting…"; $("navThen").hidden = true;
+  speak("Rerouting.");
+  try{
+    const R = await fetchRoute(here, nav.route.to);
+    nav.route = currentRoute = R; nav.seg = 0; nav.along = 0; nav.offCount = 0; nav.spoken = {}; nav.lastK = -1;
+    drawRoute(R);
+  }catch(e){ $("navText").textContent = "Couldn't reroute. Trying again shortly."; }
+  nav.rerouting = false; updateBanner();
+}
+
+async function startNav(demo){
+  if (!currentRoute) return;
+  Object.assign(nav, { on:true, route:currentRoute, seg:0, along:0, offCount:0, spoken:{}, lastK:-1, follow:true, speed:0 });
+  drawRoute(currentRoute);
+  document.body.classList.add("navigating");
+  $("navTop").hidden = false; $("navBottom").hidden = false; $("recenter").hidden = true;
+  $("navMute").textContent = nav.muted ? "Muted" : "Voice on";
+  updateBanner();
+  // first words must be spoken inside the tap, or iPhones block the voice
+  const first = currentRoute.man[0];
+  speak(first ? (first.verbal_pre_transition_instruction || first.instruction) : "Starting route.");
+  nav.spoken["0p"] = true;
+  map.setZoom(17);
+  if (demo){
+    let along = 0; const v = 15;                       // about 34 mph
+    nav.sim = setInterval(() => {
+      along += v;
+      const R = nav.route, cum = R.cum;
+      if (along >= R.len) along = R.len;
+      let i = 0; while (i < cum.length - 2 && cum[i+1] < along) i++;
+      const t = cum[i+1] > cum[i] ? (along - cum[i]) / (cum[i+1] - cum[i]) : 0;
+      const a = R.pts[i], b = R.pts[i+1];
+      onFix({ coords:{ latitude: a[0] + t*(b[0]-a[0]), longitude: a[1] + t*(b[1]-a[1]), speed: v, heading: bearing(a, b), accuracy: 5 } });
+    }, 1000);
+  } else {
+    if (!navigator.geolocation){ $("navText").textContent = "This phone isn't sharing its location."; return; }
+    nav.watch = navigator.geolocation.watchPosition(onFix, onFixErr, { enableHighAccuracy:true, maximumAge:1000, timeout:20000 });
+  }
+  try{ if (navigator.wakeLock) nav.wake = await navigator.wakeLock.request("screen"); }catch(e){}
+}
+function endNav(arrived){
+  nav.on = false;
+  if (nav.watch != null) navigator.geolocation.clearWatch(nav.watch);
+  if (nav.sim) clearInterval(nav.sim);
+  nav.watch = null; nav.sim = null;
+  try{ if (nav.wake) nav.wake.release(); }catch(e){} nav.wake = null;
+  if (!arrived && "speechSynthesis" in window) speechSynthesis.cancel();
+  document.body.classList.remove("navigating");
+  $("navTop").hidden = true; $("navBottom").hidden = true; $("recenter").hidden = true;
+  if (nav.me){ layers.me.removeLayer(nav.me); nav.me = null; }
+  if (currentRoute) drawRoute(currentRoute);
+  $("routeStatus").textContent = arrived ? "You've arrived." : "Navigation ended.";
+}
+$("startNav").addEventListener("click", () => startNav(false));
+$("demoNav").addEventListener("click", () => startNav(true));
+$("navEnd").addEventListener("click", () => endNav(false));
+$("navMute").addEventListener("click", () => {
+  nav.muted = !nav.muted; store.set("muted", nav.muted);
+  $("navMute").textContent = nav.muted ? "Muted" : "Voice on";
+  if (nav.muted && "speechSynthesis" in window) speechSynthesis.cancel(); else speak("Voice on.");
+});
+map.on("dragstart", () => { if (nav.on){ nav.follow = false; $("recenter").hidden = false; } });
+$("recenter").addEventListener("click", () => { nav.follow = true; $("recenter").hidden = true; if (myPos) followMe(myPos); });
+document.addEventListener("visibilitychange", async () => {
+  if (nav.on && document.visibilityState === "visible" && navigator.wakeLock){ try{ nav.wake = await navigator.wakeLock.request("screen"); }catch(e){} }
+});
 
 /* ---------- Sheet & tabs ---------- */
 $("toggle").addEventListener("click", () => {
