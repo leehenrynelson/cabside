@@ -67,6 +67,7 @@ input,select{font:16px var(--body);padding:10px;border-radius:8px;border:1px sol
 .sq.park{background:#0057b8} .sq.load{background:#6b3fa0} .sq.mine{background:#f2b705;color:#111}
 .leaflet-popup-content{font:14px/1.4 var(--body)}
 .leaflet-popup-content h3{font:700 16px/1.1 var(--display);text-transform:uppercase;margin:0 0 4px}
+[hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -74,7 +75,7 @@ input,select{font:16px var(--body);padding:10px;border-radius:8px;border:1px sol
 <div id="map" role="application" aria-label="Map"></div>
 
 <header class="top">
-  <div class="brand"><b>HGV</b>Cabside <small style="font-size:12px;letter-spacing:.05em;color:var(--muted)">v5</small></div>
+  <div class="brand"><b>HGV</b>Cabside <small style="font-size:12px;letter-spacing:.05em;color:var(--muted)">v6</small></div>
   <span id="llcs" class="pill" title="London Lorry Control Scheme">LLCS…</span>
   <span class="spacer"></span>
   <span id="loadMsg" class="hint" style="margin:0"></span>
@@ -114,10 +115,7 @@ input,select{font:16px var(--body);padding:10px;border-radius:8px;border:1px sol
         <label>From<input id="from" placeholder="Postcode, or blank = my location" autocomplete="postal-code"></label>
         <label>To<input id="to" placeholder="Destination postcode" autocomplete="postal-code"></label>
       </div>
-      <div class="row" style="margin-top:10px">
-        <label>Routing key (free)<input id="orsKey" type="password" placeholder="openrouteservice key"></label>
-      </div>
-      <p class="hint">Truck routing uses your size and weight. Get a free key at openrouteservice.org (sign up → Dashboard → API key). It stays on this phone.</p>
+      <p class="hint">Plans a truck route for the height, width, length and weight in Vehicle. Drive time uses the 56 mph limiter. No sign-up needed.</p>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
         <button id="go">Plan HGV route</button>
         <button id="clearRoute" class="ghost">Clear</button>
@@ -170,8 +168,6 @@ function vehicle(){
 vehFields.forEach(f => $(f).addEventListener("change", () => {
   const o = {}; vehFields.forEach(g => o[g] = $(g).value); store.set("veh", o); renderRestrictions();
 }));
-$("orsKey").value = store.get("orsKey", "");
-$("orsKey").addEventListener("change", () => store.set("orsKey", $("orsKey").value.trim()));
 
 /* ---------- London Lorry Control Scheme ----------
    Over 18t GVW: Mon–Fri 21:00–07:00, Sat 13:00 to Mon 07:00 (London Councils). */
@@ -369,7 +365,20 @@ function locate(fly){
 }
 $("locate").addEventListener("click", () => locate(true));
 
-/* ---------- Routing (openrouteservice driving-hgv) ---------- */
+/* ---------- Routing ---------- */
+function decodePolyline6(str){
+  let i = 0, lat = 0, lng = 0; const out = [];
+  while (i < str.length){
+    for (const which of [0,1]){
+      let shift = 0, result = 0, b;
+      do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      const d = (result & 1) ? ~(result >> 1) : (result >> 1);
+      if (which === 0) lat += d; else lng += d;
+    }
+    out.push([lat / 1e6, lng / 1e6]);
+  }
+  return out;
+}
 async function postcode(pc){
   const r = await fetch("https://api.postcodes.io/postcodes/" + encodeURIComponent(pc.replace(/\s+/g,"")));
   if (!r.ok) throw new Error("Postcode not found: " + pc);
@@ -377,8 +386,6 @@ async function postcode(pc){
 }
 async function planRoute(){
   const st = $("routeStatus"); $("summary").hidden = true; layers.route.clearLayers();
-  const key = $("orsKey").value.trim(); store.set("orsKey", key);
-  if (!key){ st.textContent = "Add your free openrouteservice key first."; return; }
   if (!$("to").value.trim()){ st.textContent = "Enter a destination postcode."; return; }
   try{
     st.textContent = "Finding postcodes…";
@@ -389,24 +396,31 @@ async function planRoute(){
     const to = await postcode($("to").value);
     const v = vehicle();
     st.textContent = "Planning a truck route…";
+    /* Valhalla truck routing (FOSSGIS public server, free, no key) */
     const body = {
-      coordinates: [[from[1], from[0]], [to[1], to[0]]],
-      units: "mi", instructions: false,
-      options: { vehicle_type: "hgv", profile_params: { restrictions: {
-        height: +v.heightM.toFixed(2), width: v.widthM, length: v.lengthM, weight: v.weightT, axleload: v.axleT
-      } } }
+      locations: [{ lat: from[0], lon: from[1] }, { lat: to[0], lon: to[1] }],
+      costing: "truck",
+      costing_options: { truck: {
+        height: +v.heightM.toFixed(2), width: v.widthM, length: v.lengthM,
+        weight: v.weightT, axle_load: v.axleT, top_speed: 90
+      } },
+      units: "miles", directions_type: "none"
     };
-    const r = await fetch("https://api.openrouteservice.org/v2/directions/driving-hgv/geojson", {
-      method:"POST", headers:{ "Content-Type":"application/json", "Authorization": key }, body: JSON.stringify(body)
-    });
-    if (r.status === 401 || r.status === 403) throw new Error("The routing key was refused. Check it on openrouteservice.org.");
-    if (!r.ok) throw new Error("No truck route found for these dimensions (" + r.status + ").");
-    const j = await r.json(), f = j.features[0], s = f.properties.summary;
-    const line = L.geoJSON(f, { style:{ color:"#f2b705", weight:7, opacity:.95 } }).addTo(layers.route);
+    let r;
+    try{
+      r = await fetch("https://valhalla1.openstreetmap.de/route", {
+        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
+      });
+    }catch(e){ throw new Error("Couldn't reach the routing service. Check your signal and try again."); }
+    if (r.status === 429) throw new Error("The free routing service is busy. Wait a minute and try again.");
+    if (!r.ok) throw new Error("No truck route found for your size and weight between these postcodes.");
+    const j = await r.json(), s = j.trip.summary;
+    const pts = j.trip.legs.flatMap(l => decodePolyline6(l.shape));
+    const line = L.polyline(pts, { color:"#f2b705", weight:7, opacity:.95 }).addTo(layers.route);
     L.circleMarker(to, { radius:8, color:"#111", weight:3, fillColor:"#f2b705", fillOpacity:1 }).addTo(layers.route);
     map.fitBounds(line.getBounds(), { padding:[40,40] });
-    const mins = Math.round(s.duration/60), eta = new Date(Date.now() + s.duration*1000);
-    $("sDist").textContent = s.distance.toFixed(1);
+    const mins = Math.round(s.time/60), eta = new Date(Date.now() + s.time*1000);
+    $("sDist").textContent = s.length.toFixed(1);
     $("sTime").textContent = Math.floor(mins/60) + "h " + String(mins%60).padStart(2,"0");
     $("sEta").textContent = eta.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
     $("summary").hidden = false;
